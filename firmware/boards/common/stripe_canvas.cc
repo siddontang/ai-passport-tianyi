@@ -40,6 +40,26 @@ uint32_t NextCodepoint(const char*& text, const char* end) {
     return value < minimum || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff) ? 0xfffd : value;
 }
 
+void CopyText(char* out, size_t capacity, const char* text) {
+    if (!out || !capacity) return;
+    if (!text) { out[0] = 0; return; }
+    const char* end = text + std::strlen(text);
+    size_t written = 0;
+    while (text < end) {
+        const char* start = text;
+        const uint32_t codepoint = NextCodepoint(text, end);
+        const size_t bytes = text - start;
+        if (codepoint == 0xfffd) {
+            if (written + 1 >= capacity) break;
+            out[written++] = '?';
+        } else {
+            if (bytes >= capacity - written) break;
+            std::memcpy(out + written, start, bytes); written += bytes;
+        }
+    }
+    out[written] = 0;
+}
+
 uint16_t GlyphId(const raster_font_t& font, uint32_t codepoint) {
     if (codepoint >= 32 && codepoint < 127) return static_cast<uint16_t>(codepoint - 31);
     if (codepoint < 176 || codepoint - 176 > UINT16_MAX) return 0;

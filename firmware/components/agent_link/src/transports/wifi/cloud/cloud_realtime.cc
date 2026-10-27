@@ -136,6 +136,7 @@ std::atomic<bool>          s_ready{false};
 std::atomic<bool>          s_mute{false};
 std::atomic<bool>          s_continuous{false};
 std::atomic<uint32_t>      s_epoch{0};
+agentlink::realtime::RecoveryEpoch s_recovery;
 std::atomic<uint32_t>      s_reset{0};
 std::mutex                s_mutex;
 QueueHandle_t             s_tx = nullptr;
@@ -989,6 +990,8 @@ public:
             s_mute.store(false);
             if (!s_ready.exchange(true) && s_cb.state)
                 s_cb.state(true, continuous_ ? "Microphone on" : "Hold to talk, release to send");
+            // Publish transport READY before allowing the app to leave recovery.
+            s_recovery.End(epoch_);
             ESP_LOGI(TAG, "voice session ready (%s 16 kHz up, %s 24 kHz down, %s)",
                      audio_.input_opus ? "Opus" : "PCM16", audio_.output_opus ? "Opus" : "PCM16",
                      continuous_ ? "server endpointing" : "client PTT");
@@ -1063,10 +1066,37 @@ public:
                 s_cb.text(text->valuestring);
 #endif
             }
-        } else if (strcmp(event, "error") == 0 || strcmp(event, "session.error") == 0 ||
-                   strcmp(event, "session.ended") == 0) {
-            // Do not print server payloads: they can contain connection credentials.
-            ESP_LOGW(TAG, "server ended or rejected the voice session");
+        } else if (strcmp(event, "error") == 0 || strcmp(event, "session.error") == 0) {
+            // An error can reject one operation while the realtime connection
+            // remains usable. Only an explicit JSON true permits continuation;
+            // legacy errors without that field still end the call.
+            const cJSON* recoverable = cJSON_GetObjectItemCaseSensitive(json, "recoverable");
+            keep = cJSON_IsTrue(recoverable);
+            const cJSON* value = cJSON_GetObjectItemCaseSensitive(json, "code");
+            const char* code = "unrecognized";
+            static const char* const codes[] = {
+                "invalid_connect_token", "registration_revoked", "session_busy",
+                "provider_unavailable", "realtime_language_unsupported", "provider_quota",
+                "audio_format_unsupported", "activity_signal_required", "endpointing_unsupported",
+                "task_conflict", "no_response_timeout", "session_expired", "invalid_event",
+                "output_backlog_exceeded", "output_flow_stalled",
+            };
+            if (cJSON_IsString(value)) for (const char* known : codes) {
+                if (strcmp(value->valuestring, known) == 0) { code = known; break; }
+            }
+            // Log only protocol constants, never free-form server messages,
+            // identifiers or credentials. Keep audio/response state unchanged:
+            // response.interrupted and response.audio.done own those transitions.
+            ESP_LOGW(TAG, "voice server event: type=%s code=%s recoverable=%d action=%s",
+                     event, code, cJSON_IsBool(recoverable) ? int(keep) : -1, keep ? "continue" : "end");
+        } else if (strcmp(event, "session.ended") == 0) {
+            const cJSON* value = cJSON_GetObjectItemCaseSensitive(json, "reason");
+            const char* reason = "unrecognized";
+            static const char* const reasons[] = {"client", "server", "timeout", "idle", "expired"};
+            if (cJSON_IsString(value)) for (const char* known : reasons) {
+                if (strcmp(value->valuestring, known) == 0) { reason = known; break; }
+            }
+            ESP_LOGW(TAG, "voice server event: type=session.ended reason=%s action=end", reason);
             keep = false;
         }
         cJSON_Delete(json);
@@ -1947,11 +1977,15 @@ void Worker(void*) {
             }
             bool retryable = false;
             if (granted && Current(grant.epoch)) retryable = ConnectOnce(grant);
+            const bool retry = grant.platform && retryable && may_retry && Current(grant.epoch);
+            // Publish recovery before any not-ready notification. Otherwise an
+            // application can mistake this gap for a terminal end and cancel us.
+            if (retry) s_recovery.Begin(grant.epoch);
+            else s_recovery.End(grant.epoch);
             s_ready.store(false);
             ResetInput();
             if (s_cb.audio_reset) s_cb.audio_reset();
             // Notify applications before cleanup/backoff so the mic stops while offline.
-            const bool retry = grant.platform && retryable && may_retry && Current(grant.epoch);
             if (retryable) hint = "Voice network failed. Tap Connect to retry";
             if (s_cb.state) s_cb.state(false, retry ? "Voice interrupted. Reconnecting..." : hint);
             if (grant.platform && (granted || (grant.url[0] && grant.token[0])))
@@ -1971,6 +2005,7 @@ void Worker(void*) {
             memset(grant.token, 0, sizeof grant.token);
             return true;
         });
+        s_recovery.End(grant.epoch);
         if (s_cb.finished) s_cb.finished();
         grant = {};
     }
@@ -2130,6 +2165,7 @@ void cloud_realtime_set_callbacks(const cloud_realtime_callbacks_t* callbacks) {
 }
 
 bool cloud_realtime_ready(void) { return s_ready.load(); }
+bool cloud_realtime_recovering(void) { return s_recovery.Active(s_epoch.load()); }
 
 void cloud_realtime_cancel(void) {
     std::lock_guard<std::mutex> lock(s_mutex);

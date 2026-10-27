@@ -9,6 +9,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+extern "C" const raster_font_t passport_font_16;
+
 namespace passport_wifi {
 namespace {
 struct Frame {
@@ -30,7 +32,8 @@ avatar::Envelope envelope;
 avatar::State PortraitState(const Frame& value) {
     if (strcmp(value.title, "Agent speaking") == 0) return avatar::State::Speaking;
     if (strcmp(value.title, "Listening") == 0) return avatar::State::Listening;
-    if (strcmp(value.title, "Starting call") == 0) return avatar::State::Waiting;
+    if (strcmp(value.title, "Starting call") == 0 || strcmp(value.title, "Reconnecting") == 0)
+        return avatar::State::Waiting;
     return avatar::State::Idle;
 }
 
@@ -39,8 +42,9 @@ bool Latin(const char* text) {
         if (*p >= 0x80) return false;
     return true;
 }
-void Text(raster::Canvas& canvas, const raster_font_t& font, const char* text,
+void Text(raster::Canvas& canvas, const raster_font_t& preferred_font, const char* text,
           int x, int y, int width, int lines, uint32_t color) {
+    const auto& font = Latin(text) ? preferred_font : passport_font_16;
     raster::TextLayout layout;
     layout.Wrap(font, text, width);
     for (unsigned i = 0; i < layout.Count() && i < static_cast<unsigned>(lines); ++i)
@@ -73,7 +77,8 @@ void Render(void*) {
         const bool waiting_changed = waiting_second != second;
         char waiting_hint[64]{};
         if (state == avatar::State::Waiting) {
-            const char* stage = strstr(frame.status.hint, "access") ? "Requesting access" :
+            const char* stage = strcmp(frame.title, "Reconnecting") == 0 ? "Reconnecting" :
+                                strstr(frame.status.hint, "access") ? "Requesting access" :
                                 strstr(frame.status.hint, "model") ? "Starting voice model" :
                                 strstr(frame.status.hint, "Connecting") ? "Opening connection" : "Preparing call";
             snprintf(waiting_hint, sizeof waiting_hint, "%s %us", stage, unsigned(second));
@@ -110,7 +115,8 @@ void Render(void*) {
             canvas.Clip({24, 52, 192, 212});
             Text(canvas, pairing ? raster_montserrat_28 : raster_montserrat_20,
                  title, 24, 54, 192, 2, 0xF4F4EC);
-            Text(canvas, raster_montserrat_14, detail, 24, 111, 192, 6, 0xC7D3D9);
+            Text(canvas, Latin(title) ? raster_montserrat_14 : passport_font_16,
+                 detail, 24, 111, 192, 6, 0xC7D3D9);
             if (!link && frame.answer[0])
                 Text(canvas, raster_montserrat_14, frame.answer, 24, 213, 192, 2, accent);
             canvas.Clip({12, 281, 216, 39});
@@ -151,14 +157,13 @@ void SetStatus(const agent_link_status_t& status) {
     input.status = status; ++input.revision;
 }
 void SetContent(const char* title, const char* detail, const char* footer, View view, int volume) {
-    const char* shown_detail = Latin(detail) ? detail : "Conversation selected";
     std::lock_guard<std::mutex> guard(lock);
-    if (strcmp(input.title, title) == 0 && strcmp(input.detail, shown_detail) == 0 &&
+    if (strcmp(input.title, title) == 0 && strcmp(input.detail, detail) == 0 &&
         strcmp(input.footer, footer) == 0 && input.view == view &&
         (volume < 0 || input.volume == volume)) return;
-    snprintf(input.title, sizeof input.title, "%s", title);
-    snprintf(input.detail, sizeof input.detail, "%s", shown_detail);
-    snprintf(input.footer, sizeof input.footer, "%s", footer);
+    raster::CopyText(input.title, sizeof input.title, title);
+    raster::CopyText(input.detail, sizeof input.detail, detail);
+    raster::CopyText(input.footer, sizeof input.footer, footer);
     input.view = view;
     if (volume >= 0) input.volume = volume > 100 ? 100 : volume;
     ++input.revision;

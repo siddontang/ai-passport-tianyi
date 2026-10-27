@@ -228,6 +228,35 @@ int main() {
     }
     std::puts("PASS: long opaque and URL-escaped cursors preserve all conversations");
 
+    // The official C3 build failed on this live page shape: 1, 1, 2, 2 rows,
+    // with a 323-byte cursor between pages. Keep all identifiers synthetic.
+    const std::string live_cursors[] = {
+        std::string(323, 'a'), std::string(323, 'b'), std::string(323, 'c')};
+    const std::string live_pages[] = {
+        R"({"code":0,"success":true,"data":{"items":[{"conversation_id":"page-session-1"}],"has_more":true,"next_cursor":")" + live_cursors[0] + R"("}})",
+        R"({"code":0,"success":true,"data":{"items":[{"conversation_id":"page-session-2"}],"has_more":true,"next_cursor":")" + live_cursors[1] + R"("}})",
+        R"({"code":0,"success":true,"data":{"items":[{"conversation_id":"page-session-3"},{"conversation_id":"page-session-4"}],"has_more":true,"next_cursor":")" + live_cursors[2] + R"("}})",
+        R"({"code":0,"success":true,"data":{"items":[{"conversation_id":"page-session-5"},{"conversation_id":"page-session-6"}],"has_more":false,"next_cursor":null}})"};
+    const auto expect_live_pages = [&](unsigned pages) {
+        for (unsigned i = 0; i < pages; ++i) {
+            const std::string path = i ? kListPath + "&cursor=" + live_cursors[i - 1] : kListPath;
+            Expect(HTTP_METHOD_GET, path.c_str(), live_pages[i].c_str());
+        }
+    };
+    expect_live_pages(3);
+    CHECK(agent_link_platform_conversations(7, 0, sessions, 3, &count, &total) == ESP_OK);
+    CHECK(count == 3 && total > 3);
+    CHECK(std::strcmp(sessions[0].id, "page-session-1") == 0);
+    CHECK(std::strcmp(sessions[1].id, "page-session-2") == 0);
+    CHECK(std::strcmp(sessions[2].id, "page-session-3") == 0);
+    expect_live_pages(4);
+    CHECK(agent_link_platform_conversations(7, 3, sessions, 3, &count, &total) == ESP_OK);
+    CHECK(count == 3 && total == 6);
+    CHECK(std::strcmp(sessions[0].id, "page-session-4") == 0);
+    CHECK(std::strcmp(sessions[1].id, "page-session-5") == 0);
+    CHECK(std::strcmp(sessions[2].id, "page-session-6") == 0);
+    std::puts("PASS: live C3 sparse pages and 323-byte cursors fill both menu pages without skipping conversations");
+
     // Agent filtering can leave an empty page while the upstream cursor advances.
     const std::string filtered_cursor(323, 'f');
     const std::string empty_page = R"({"data":{"items":[],"has_more":true,"next_cursor":")" + filtered_cursor + R"("}})";

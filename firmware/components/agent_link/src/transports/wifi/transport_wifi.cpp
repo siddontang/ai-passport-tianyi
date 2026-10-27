@@ -885,6 +885,10 @@ extern "C" esp_err_t agent_transport_wifi_end_realtime(void) {
     return ESP_OK;
 }
 
+extern "C" bool agent_transport_wifi_realtime_recovering(void) {
+    return cloud_realtime_recovering();
+}
+
 
 #else  // !SOC_WIFI_SUPPORTED
 
@@ -931,5 +935,6 @@ extern "C" void agent_transport_wifi_set_audio(void (*)(const uint8_t*, size_t),
                                                void (*)(void), void (*)(const char*)) {}
 extern "C" esp_err_t agent_transport_wifi_request_realtime(void) { return ESP_ERR_NOT_SUPPORTED; }
 extern "C" esp_err_t agent_transport_wifi_end_realtime(void) { return ESP_ERR_NOT_SUPPORTED; }
+extern "C" bool agent_transport_wifi_realtime_recovering(void) { return false; }
 
 #endif

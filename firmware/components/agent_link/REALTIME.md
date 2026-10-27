@@ -46,10 +46,29 @@ on that stream. Platform calls retry transport failures at most twice per call,
 after 2 and 4 seconds, releasing the previous grant and obtaining a fresh token.
 Microphone capture pauses during recovery and queued audio is discarded; speech
 during the interruption must be repeated. Leaving the call cancels recovery.
-Explicit server session errors/close frames, invalid media and grant rejection
-do not trigger automatic retries. MQTT/direct grants retain manual reconnection.
+Errors with an explicit JSON `recoverable: true` retain the current call and
+audio state. Missing, false or incorrectly typed recoverability remains terminal;
+`session.ended` and close frames always end the call. Terminal server errors,
+invalid media and grant rejection do not trigger automatic retries.
+MQTT/direct grants retain manual reconnection.
 Logs include operation/result, errno, socket/TLS errors, WiFi association/RSSI,
-internal heap availability and uplink queue duration, without server reason text.
+internal heap availability and uplink queue duration. Server-event diagnostics
+include only known protocol error codes, the recoverable flag, and known end
+reason values; free-form messages, unknown code/reason strings and identifiers
+are never logged. The production Call tests cover continuation through audio
+and subsequent input, terminal events, malformed flags and diagnostic redaction.
+
+`agent_link_realtime_recovering()` identifies a retry of the current request. It
+is false before SDK initialization, on other transports, after cancellation and
+after retry exhaustion. The worker publishes recovery before clearing readiness
+and notifying the app; `session.ready` clears it after publishing transport READY.
+A request generation prevents old completion from clearing a newer recovery.
+Pixel.18's AI Passport controller pauses capture and preserves the call while
+this flag is true, bypassing its initial 30-second setup deadline. It resumes
+capture once READY returns. The microphone loop releases stale stream handles
+without cancelling a fresh grant and treats invalid-state open/write races as
+transient. Terminal completion and explicit user exit still stop the call.
+This does not add automatic recovery after loss of WiFi/platform connectivity.
 
 The C3 path sends an unsolicited masked Pong every ten seconds when no TLS write
 is pending, as permitted by RFC 6455 section 5.5.3. The gateway updates liveness
@@ -192,6 +211,8 @@ physical-device acceptance were not covered by those checks.
 
 Relevant host checks are `firmware/tests/test_platform_api.py` (including
 `--c3 --voice-worker` and `--c3 --voice-memory`), `firmware/tests/test_realtime_recovery.py`,
+`firmware/tests/test_passport_recovery.py` (actual worker, controller and microphone
+code with injected interruptions), `firmware/tests/test_passport_menu.py`,
 `firmware/tests/test_tls_receive_memory.py --idf-path <IDF>` (actual SDK RX allocation
 functions with a bounded allocator; decryption/networking are not simulated),
 `firmware/tests/test_passport_wifi.py` and `firmware/tests/test_stopwatch_controls.py`.

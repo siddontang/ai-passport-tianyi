@@ -6,6 +6,7 @@
 #include "passport_wifi_audio.h"
 #include "passport_wifi_controls.h"
 #include "passport_wifi_ui.h"
+#include "stripe_canvas.h"
 
 #include <atomic>
 #include <cstdio>
@@ -19,6 +20,8 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
+
+extern "C" const raster_font_t passport_font_16;
 
 namespace {
 constexpr const char* TAG = "Passport.wifi";
@@ -100,7 +103,7 @@ private:
         if (result != ESP_OK) ESP_LOGW(TAG, "Settings save failed: %s", esp_err_to_name(result));
     }
     void EndCall() {
-        calling_ = active_ = false;
+        calling_ = active_ = recovering_ = false;
         requested_at_ = 0;
         audio_.Stop();
         (void)agent_link_end_realtime();
@@ -126,7 +129,7 @@ private:
             if (page_ == Page::Sessions) SetPage(Page::Home);
         }
         voice_supported_ = bound.voice_supported;
-        snprintf(agent_name_, sizeof agent_name_, "%s", bound.name);
+        raster::CopyText(agent_name_, sizeof agent_name_, bound.name);
         if (explain && !voice_supported_)
             snprintf(message_, sizeof message_, "The bound Agent does not support realtime voice.");
         return voice_supported_;
@@ -138,17 +141,15 @@ private:
     void Add(Action action, const char* name, unsigned row = 0) {
         if (count_ >= 6) return;
         Item& item = items_[count_++]; item.action = action; item.row = row;
-        // The tiny raster font covers Latin text. Never expose internal session IDs as titles.
-        bool latin = true;
-        for (const unsigned char* p = reinterpret_cast<const unsigned char*>(name); *p; ++p)
-            if (*p >= 0x80) latin = false;
-        snprintf(item.name, sizeof item.name, "%s", latin ? name : "Conversation");
+        raster::CopyText(item.name, sizeof item.name, name);
+        for (char* p = item.name; *p; ++p)
+            if (*p == '\r' || *p == '\n' || *p == '\t') *p = ' ';
     }
     void Menu() {
         EndCall(); SetPage(Page::Menu); passport_wifi::SetAnswer("");
-        Add(Action::Sessions, "Choose conversation");
-        Add(Action::New, "New conversation");
-        Add(Action::Back, "Back");
+        Add(Action::Sessions, "选择会话");
+        Add(Action::New, "新建对话");
+        Add(Action::Back, "返回");
     }
     bool Fetch(size_t offset) {
         size_t count = 0, total = 0;
@@ -159,24 +160,24 @@ private:
     }
     void Sessions(size_t offset = 0) {
         if (!SyncAgent(true)) return;
-        EndCall(); Busy("Loading conversations");
+        EndCall(); Busy("正在加载会话");
         if (!Fetch(offset)) return;
         if (!fetched_ && offset && !Fetch(0)) return;
         SetPage(Page::Sessions);
         for (size_t i = 0; i < fetched_; ++i)
-            Add(Action::Select, sessions_[i].name[0] ? sessions_[i].name : "Conversation", i);
-        if (offset_) Add(Action::Previous, "Previous page");
-        if (total_ > offset_ + fetched_) Add(Action::Next, "Next page");
-        Add(Action::Back, "Back");
-        if (!fetched_) snprintf(message_, sizeof message_, "No conversations. Back > New conversation.");
+            Add(Action::Select, sessions_[i].name[0] ? sessions_[i].name : "未命名会话", i);
+        if (offset_) Add(Action::Previous, "上一页");
+        if (total_ > offset_ + fetched_) Add(Action::Next, "下一页");
+        Add(Action::Back, "返回");
+        if (!fetched_) snprintf(message_, sizeof message_, "暂无会话。请返回后选择新建对话。");
     }
     void Busy(const char* title) {
         view_.fetch_add(1);
-        passport_wifi::SetContent(title, "Please wait...", "UP / DOWN: volume");
+        passport_wifi::SetContent(title, "请稍候...", "上/下：音量");
     }
     void SelectSession(size_t row) {
         snprintf(session_, sizeof session_, "%s", sessions_[row].id);
-        snprintf(session_name_, sizeof session_name_, "%s", sessions_[row].name);
+        raster::CopyText(session_name_, sizeof session_name_, sessions_[row].name);
         saved_agent_ = agent_; Save(); SetPage(Page::Home);
     }
     bool CreateSession() {
@@ -184,7 +185,7 @@ private:
         const esp_err_t result = agent_link_platform_create_conversation(agent_, id, sizeof id);
         if (result != ESP_OK) { Error(result); return false; }
         snprintf(session_, sizeof session_, "%s", id);
-        snprintf(session_name_, sizeof session_name_, "New conversation");
+        snprintf(session_name_, sizeof session_name_, "新建对话");
         saved_agent_ = agent_; Save(); return true;
     }
     void StartCall() {
@@ -194,7 +195,7 @@ private:
         if (agent_link_state() != AGENT_STATE_CONNECTED) {
             snprintf(message_, sizeof message_, "Waiting for platform connection."); return;
         }
-        Busy("Preparing voice");
+        Busy("正在准备语音");
         if (!session_[0]) {
             if (!Fetch(0)) return;
             if (fetched_) SelectSession(0);
@@ -208,7 +209,7 @@ private:
         const esp_err_t result = agent_link_request_realtime_session(agent_, session_);
         if (result != ESP_OK) { Error(result); return; }
         passport_wifi::SetAnswer(""); message_[0] = 0;
-        calling_ = true; active_ = false; requested_at_ = esp_timer_get_time();
+        calling_ = true; active_ = recovering_ = false; requested_at_ = esp_timer_get_time();
     }
     void Handle(Gesture gesture) {
         if (gesture == Gesture::Click || gesture == Gesture::Hold)
@@ -226,7 +227,7 @@ private:
             switch (item.action) {
             case Action::Sessions: Sessions(); break;
             case Action::New:
-                if (SyncAgent(true)) { Busy("Creating conversation"); if (CreateSession()) SetPage(Page::Home); }
+                if (SyncAgent(true)) { Busy("正在创建对话"); if (CreateSession()) SetPage(Page::Home); }
                 break;
             case Action::Back: if (page_ == Page::Sessions) Menu(); else SetPage(Page::Home); break;
             case Action::Select: SelectSession(item.row); break;
@@ -242,20 +243,51 @@ private:
             if (message_[0]) snprintf(detail, sizeof detail, "%s", message_);
             else for (size_t i = (cursor_ / 3) * 3; i < count_ && i < (cursor_ / 3) * 3 + 3; ++i) {
                 const size_t used = strlen(detail);
-                snprintf(detail + used, sizeof detail - used, "%s %.22s\n\n", i == cursor_ ? ">" : " ", items_[i].name);
+                raster::TextLayout line;
+                line.Wrap(passport_font_16, items_[i].name, 168);
+                const int bytes = line.Count() ? line.End(0) : 0;
+                snprintf(detail + used, sizeof detail - used, "%s %.*s\n\n",
+                         i == cursor_ ? ">" : " ", bytes, items_[i].name);
             }
-            passport_wifi::SetContent(page_ == Page::Menu ? "Voice menu" : "Conversations", detail,
-                                      "UP/DOWN: choose   OK: select");
+            passport_wifi::SetContent(page_ == Page::Menu ? "语音菜单" : "会话列表", detail,
+                                      "上/下：选择  OK：确认");
         } else {
             if (message_[0]) snprintf(detail, sizeof detail, "%s", message_);
             else snprintf(detail, sizeof detail, "%s\n\n%s\n\nVolume %d%%",
                           agent_name_[0] ? agent_name_ : "Bind Agent in console",
                           session_[0] ? "Conversation selected" : "OK selects latest or creates one", volume_.load());
             passport_wifi::SetContent(active_ ? (audio_.Speaking() ? "Agent speaking" : "Listening") :
-                                      calling_ ? "Starting call" : "Agent Link", detail,
+                                      calling_ ? (recovering_ ? "Reconnecting" : "Starting call") : "Agent Link", detail,
                                       calling_ ? "OK: end   Hold: menu" : "OK: call   Hold: menu",
                                       message_[0] ? passport_wifi::View::Text : passport_wifi::View::Portrait,
                                       volume_.load());
+        }
+    }
+    void UpdateCall(int64_t now) {
+        if (!calling_) return;
+        const auto state = agent_link_state();
+        if (agent_link_realtime_recovering()) {
+            if (!recovering_) ESP_LOGW(TAG, "call transport interrupted; preserving recovery");
+            audio_.Enable(false); active_ = false; recovering_ = true;
+            return;
+        }
+        // Recovery may finish between the two reads. Defer the decision until
+        // the next control tick instead of ending a just-restored connection.
+        if (state != agent_link_state()) return;
+        if (state == AGENT_STATE_READY) {
+            if (active_ && !audio_.Enabled()) {
+                // A stop callback may race the first recovery check above.
+                if (agent_link_realtime_recovering() || agent_link_state() != AGENT_STATE_READY) return;
+                const bool failed = audio_.MicrophoneFailed();
+                EndCall(); snprintf(message_, sizeof message_, "%s Press OK to retry.",
+                                    failed ? "Microphone could not start." : "Voice disconnected.");
+            } else if (!active_) {
+                if (recovering_) ESP_LOGI(TAG, "call transport recovered; resuming microphone");
+                audio_.Enable(true); active_ = true; recovering_ = false;
+            }
+        } else if (recovering_ || active_ || state == AGENT_STATE_DISCONNECTED || now - requested_at_ > 30000000) {
+            ESP_LOGI(TAG, "call ended: state=%u recovered_wait=%u", unsigned(state), unsigned(recovering_));
+            EndCall(); snprintf(message_, sizeof message_, "Call ended. Press OK to retry.");
         }
     }
     void ControlLoop() {
@@ -270,17 +302,7 @@ private:
                 (void)SyncAgent(); sync_at = now;
                 if (saved_volume != volume_.load()) { Save(); saved_volume = volume_.load(); }
             }
-            if (calling_) {
-                if (active_ && !audio_.Enabled()) {
-                    const bool microphone_failed = audio_.MicrophoneFailed();
-                    EndCall(); snprintf(message_, sizeof message_, "%s Press OK to retry.",
-                                        microphone_failed ? "Microphone could not start." : "Voice disconnected.");
-                } else if (agent_link_state() == AGENT_STATE_READY) {
-                    if (!active_) { audio_.Enable(true); active_ = true; }
-                } else if (active_ || agent_link_state() == AGENT_STATE_DISCONNECTED || now - requested_at_ > 30000000) {
-                    EndCall(); snprintf(message_, sizeof message_, "Call ended. Press OK to retry.");
-                }
-            }
+            UpdateCall(now);
             Publish();
         }
     }
@@ -320,7 +342,7 @@ private:
     int agent_ = 0;
     int32_t saved_agent_ = 0;
     char session_[80]{}, session_name_[96]{}, agent_name_[80]{}, message_[144]{};
-    bool voice_supported_ = false, calling_ = false, active_ = false;
+    bool voice_supported_ = false, calling_ = false, active_ = false, recovering_ = false;
     int64_t requested_at_ = 0;
 };
 

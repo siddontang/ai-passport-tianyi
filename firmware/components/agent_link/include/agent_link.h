@@ -281,6 +281,12 @@ esp_err_t agent_link_request_realtime(void);
 /** End a realtime call and discard pending grants and microphone packets. */
 esp_err_t agent_link_end_realtime(void);
 
+/** True while the current WiFi call retries a transport failure. Applications
+ * should pause capture without ending the call; readiness returns after a fresh
+ * grant. False before init, for other transports, after cancellation or exhaustion.
+ */
+bool agent_link_realtime_recovering(void);
+
 // The next three functions are safe to call from any task, even before agent_link_init() (boards
 // are constructed before init and may call them from their constructors).
 

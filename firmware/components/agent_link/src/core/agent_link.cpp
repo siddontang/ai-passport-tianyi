@@ -989,6 +989,11 @@ esp_err_t agent_link_end_realtime(void) {
     return agent_transport_wifi_end_realtime();
 }
 
+bool agent_link_realtime_recovering(void) {
+    return s_tx && s_cfg.transport == AGENT_TRANSPORT_WIFI &&
+           agent_transport_wifi_realtime_recovering();
+}
+
 // ── Uplink: events / status (control plane, wired) ───────────────────────────────
 esp_err_t agent_link_report_battery(uint8_t percent, bool charging) {
     // Event 0x14 (PowerStatus). payload = {charging_state, level}:

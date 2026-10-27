@@ -69,12 +69,16 @@ in the platform console, and bind an Agent supporting realtime voice.
   after `session.ready`. There is no hold-to-send interaction in the WiFi profile.
 - UP/DOWN change volume by 5%, repeating while held. Volume is saved locally.
 - Hold OK to end the call and open the menu. UP/DOWN select an entry, OK confirms;
-  hold OK again to return home. Existing conversations have previous/next pages.
+  hold OK again to return home. Chinese menus include conversation selection,
+  creation, previous/next pages and Back; UTF-8 conversation titles are retained.
 - The first call uses the latest returned conversation, or creates one if none
   exist. The selection survives restart only for the same bound Agent. The menu
   can select another conversation or create one; it does not delete conversations.
-- Loss of network ends the call and stops capture. Connectivity retries through
-  the SDK; press OK again after recovery to resume with a fresh voice grant.
+- A voice transport interruption pauses capture while the SDK retries with a
+  fresh grant, at most twice per call after 2 and 4 seconds. The portrait shows
+  Reconnecting and capture resumes after READY. Interrupted speech must be repeated.
+  Loss of WiFi/platform connectivity, terminal server events and exhausted retries
+  still end the call; press OK again after connectivity returns.
 - Speaker playback and its echo tail suppress microphone feedback. The official
   C3 voice worker sends cached Opus silence during replies and resumes microphone
   encoding after the speaker drains. This is half-duplex feedback prevention.
@@ -87,6 +91,21 @@ The earlier main-based pixel builds omitted those official fixes.
 Pixel.15 adds the C3 unsolicited-Pong keepalive described in the SDK notes. It
 addresses the gateway's Pong-based timeout during long paced replies, without
 changing the pixel.14 codec, buffer or display configuration.
+
+Pixel.17 distinguishes recoverable server errors from terminal session events.
+An explicit `recoverable: true` preserves the call; other errors and
+`session.ended` remain terminal. Diagnostics record known error/end-reason values
+without server messages or identifiers. The audio, keepalive, caption and avatar
+paths are unchanged from pixel.16.
+
+Pixel.18 fixes the app-layer cancellation of transport recovery when READY drops.
+The SDK exposes recovery for the current request before notifying the app of an
+interruption; the controller keeps the call open until READY returns or recovery
+ends. Transient microphone stream errors no longer disable capture intent.
+Chinese menus reuse the existing subtitle font and stripe renderer. Pagination
+logs contain only row counts, offsets and the more-pages flag. Production-code
+host tests cover retry/cancel/resume behavior and menu rendering; this build has
+not yet been flashed or accepted on a physical AI Passport.
 
 Both directions use Opus in 20 ms packets; output is 24 kHz/24 kbps and is decoded
 at the speaker's 16 kHz. One resident C3 worker owns network and codec processing,

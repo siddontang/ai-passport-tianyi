@@ -15,6 +15,7 @@
 #include "realtime_audio.h"
 #include "realtime_audio_json.h"
 #include "realtime_captions.h"
+#include "realtime_recovery.h"
 #include "realtime_format.h"
 #include "realtime_ws_frame.h"
 #include "realtime_ws_stream.h"
@@ -26,7 +27,11 @@ using namespace agentlink::cloud_limits;
 using agentlink::realtime::AudioFormat;
 using agentlink::realtime::ReadAudioFormat;
 #define ESP_LOGI(...) ((void)0)
-#define ESP_LOGW(...) ((void)0)
+static std::string last_warning;
+template <typename... Args> void CaptureWarning(const char* format, Args... args) {
+    char text[512]; snprintf(text, sizeof text, format, args...); last_warning = text;
+}
+#define ESP_LOGW(tag, ...) CaptureWarning(__VA_ARGS__)
 #define ESP_LOGE(...) ((void)0)
 #define pdTRUE 1
 #define pdPASS 1
@@ -90,6 +95,7 @@ void vTaskDelay(unsigned ticks) {
 std::mutex s_mutex;
 QueueHandle_t s_tx = nullptr;
 std::atomic<bool> s_ready{true}, s_mute{false};
+agentlink::realtime::RecoveryEpoch s_recovery;
 std::atomic<uint32_t> s_reset{0}, s_encoded_pending{0}, s_downlink_bytes{0};
 std::atomic<uint32_t> s_media_stack{0}, s_encoder_stack{0}, s_decoded_samples{0}, s_tx_encode_max_us{0};
 bool Current(uint32_t epoch) { return epoch == 1; }
@@ -314,7 +320,14 @@ int main() {
         assert(call.Prepare() && encoder_live && !decoder_live && live_queues == baseline + 1);
         assert(!media_lib_module_malloc("OPUS", 4096)); // no fallback if the reservation is exhausted
         assert(!media_lib_module_calloc("OPUS", SIZE_MAX, 2));
+        s_ready = false;
+        s_recovery.Begin(1);
+        s_cb.state = [](bool ready, const char*) {
+            assert(ready && s_recovery.Active(1));
+        };
         Event(call, "{\"type\":\"session.ready\"}");
+        assert(!s_recovery.Active(1));
+        s_cb.state = nullptr;
         assert(call.Healthy() && encoder_live && !decoder_live);
         // Model the observed failure: the general heap no longer has a block
         // big enough for an encoder. Every transition must use the reservation.
@@ -481,8 +494,52 @@ int main() {
         s_cb.text = nullptr; actual_level = false; queued_pcm = 0;
     }
     assert(!encoder_live && !decoder_live && live_queues == baseline);
+    // A recoverable error rejects an operation, not the whole call. Exercise
+    // actual Call::Text during playback, then finish that reply and speak again.
+    s_cb.pcm = [](const uint8_t*, size_t bytes) { assert(bytes == 640); ++pcm_callbacks; };
+    for (const char* code : {"provider_unavailable", "task_conflict", "no_response_timeout"}) {
+        Call call(1, {true, true}, true); assert(call.Prepare());
+        Event(call, R"({"type":"session.ready"})");
+        Event(call, R"({"type":"response.started"})");
+        const std::string error = std::string(R"({"type":"error","code":")") + code +
+            R"(","recoverable":true,"message":"private-message-must-not-be-logged"})";
+        Event(call, error.c_str());
+        assert(call.Healthy() && s_ready && decoder_live && !encoder_live);
+        assert(last_warning == std::string("voice server event: type=error code=") + code +
+                               " recoverable=1 action=continue");
+        const unsigned before_audio = pcm_callbacks;
+        Event(call, R"({"type":"response.audio.delta","audio":"+P/+"})");
+        assert(call.Healthy() && pcm_callbacks == before_audio + 1);
+        Event(call, R"({"type":"response.audio.done"})");
+        assert(call.Healthy() && encoder_live && !decoder_live);
+        Capture(call, sender, scratch, 6, 0x55);
+        assert(call.Healthy() && last_audio == 0xa5);
+        Event(call, R"({"type":"session.error","code":"private-code-must-not-be-logged","recoverable":true})");
+        assert(call.Healthy());
+        assert(last_warning == "voice server event: type=session.error code=unrecognized recoverable=1 action=continue");
+    }
+    // Explicit terminal, missing and incorrectly typed recoverability stay
+    // terminal. session.ended always ends, even with an extraneous true field.
+    for (const char* event : {
+        R"({"type":"error","code":"provider_unavailable","recoverable":false})",
+        R"({"type":"error","code":"provider_unavailable"})",
+        R"({"type":"error","code":"provider_unavailable","recoverable":"true"})",
+        R"({"type":"session.error","code":"private-code-must-not-be-logged","recoverable":1})",
+        R"({"type":"session.ended","reason":"server","recoverable":true})",
+        R"({"type":"session.ended","reason":"private-reason-must-not-be-logged"})",
+    }) {
+        Call call(1, {true, true}, true); assert(call.Prepare());
+        Event(call, R"({"type":"session.ready"})");
+        Event(call, event);
+        assert(!call.Healthy() && last_warning.find("action=end") != std::string::npos);
+        assert(last_warning.find("private-") == std::string::npos);
+        if (strstr(event, "\"reason\":\"server\""))
+            assert(last_warning == "voice server event: type=session.ended reason=server action=end");
+    }
+    assert(!encoder_live && !decoder_live && live_queues == baseline);
     vQueueDelete(s_tx);
     printf("buffer payload bytes: mic=%zu encoded=%zu scratch=%zu decode=%zu\n",
            sizeof(Tx), sizeof(EncodedTx), sizeof(TxScratch), kDecodePcmBytes);
     puts("production C3 memory: 1000 replies on one reservation with an 18 KB fragmented heap, 50 call teardowns concurrent with foreign allocations; real-queue pacing, silence, congestion, interruption, codec/admission failures; IDF in-place base64 passed");
+    puts("server events: recoverable errors preserve playback and next input; fatal/malformed errors and session.ended stop; diagnostics omit unrecognized fields and messages");
 }

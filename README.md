@@ -2,7 +2,8 @@
 
 Custom firmware for the **FoloToy AI Passport (ESP32-C3, 8 MB flash, no PSRAM)**,
 with a Tianyi-inspired pixel companion, continuous voice conversations and Chinese
-subtitles. The current device-tested version is **2.2.1-tianyi.pixel.16**.
+subtitles. The current source version is **2.2.1-tianyi.pixel.18**; its reconnect
+and menu changes have build/host coverage and still need physical-device testing.
 
 [Chinese README](README.zh-CN.md) · [Board and controls](firmware/boards/ai-passport/README.md) ·
 [Realtime implementation](firmware/components/agent_link/REALTIME.md)
@@ -19,6 +20,9 @@ subtitles. The current device-tested version is **2.2.1-tianyi.pixel.16**.
 - Immediate user transcripts and assistant subtitles paced by released PCM samples,
   with queued audio and the I2S tail accounted for.
 - Chinese font assets, avatar/font generation tools and host regression tests.
+- Chinese menus and UTF-8 conversation titles using the existing subtitle font.
+- Bounded transport recovery that keeps the call open during retry and resumes
+  capture after a fresh grant; safe pagination and server-event diagnostics.
 
 Subtitle pacing is approximate: the current protocol supplies no word timestamps.
 The bounded text window holds 1,024 UTF-16 units and reclaims displayed prefixes
@@ -52,7 +56,7 @@ at `http://192.168.4.1`, then activate and bind the device in the
 ## Use and Agent configuration
 
 - Short-press OK to start or end a call; UP/DOWN adjusts volume.
-- Long-press OK for the menu, then choose **New conversation** to start a fresh
+- Long-press OK for the Chinese menu, then choose its second entry (New conversation) to start a fresh
   conversation. Existing conversations remain available.
 - Set the Agent's name and identity in its console persona. After changing persona,
   create a new conversation: existing sessions may retain their previous instructions.
@@ -64,6 +68,19 @@ and the current console exposes no per-Agent voice selector. A speaking-style pr
 alone does not select another preset. No Agent Stack server code is included here.
 
 ## Validation
+
+Pixel.18 passes the AI Passport WiFi ESP-IDF build and host regressions for the
+actual recovery worker, app call control and microphone loop. Tests cover both
+retry delays, resumed capture, exhaustion, grant failure, user cancellation and
+state-transition races. Chinese menus are rendered with the production code and
+checked for UTF-8 boundaries and available glyphs. Avatar, caption, keepalive,
+platform pagination and codec lifecycle checks also pass. This version has not
+been flashed or accepted on a physical device.
+
+Transport recovery uses at most two retries per call, after 2 and 4 seconds;
+interrupted speech is discarded. Explicit server termination, grant rejection
+and loss of the platform connection still end the call. Recoverable server errors
+marked with JSON `recoverable: true` keep the existing call alive.
 
 Pixel.16 passed its ESP-IDF build and host checks for rendering, captions,
 platform APIs, codec lifetime, keepalive and recovery. Physical testing confirmed
@@ -78,6 +95,8 @@ python firmware/tools/build_firmware.py --check
 python tools/board_catalog.py --check
 python tools/check_docs.py
 python firmware/tests/test_passport_avatar.py
+python firmware/tests/test_passport_menu.py
+python firmware/tests/test_passport_recovery.py
 python firmware/tests/test_realtime_captions.py
 python firmware/tests/test_realtime_keepalive.py
 python firmware/tests/test_realtime_recovery.py
@@ -96,6 +115,10 @@ its history through `526674bd948946b47a4043dcd53e2f71490a16d4`. The C3 audio rep
 incorporates upstream work from `9f664fc028a664a47789506802aecfb0b69b7e18`
 (`fix(ai-passport-wifi):audio link fixed`), followed by the local keepalive and
 subtitle fixes. This is a personal customization, not an official firmware release.
+Pixel.18 also incorporates the pagination success diagnostic from
+[upstream PR #4](https://github.com/Deotaland/Agent_link/pull/4) at
+`cbb4ea6c847d516a7562590d3abe65517827d74b` (its cursor fixes were already present),
+and adapts the upstream UTF-8 menu work while retaining the Tianyi renderer/font.
 
 The full upstream source remains available for building:
 [firmware guide](firmware/README.md), [SDK](firmware/components/agent_link/README.md),

@@ -279,6 +279,8 @@ extern "C" esp_err_t agent_link_platform_conversations(int agent_id, size_t offs
         const char* next = String(data, "next_cursor");
         if (!more || *count >= capacity) {
             *total = skipped + (more ? 1u : 0u);
+            ESP_LOGI(TAG, "list conversations: returned=%zu offset=%zu more=%u",
+                     *count, offset, unsigned(more));
             cJSON_Delete(root);
             return ESP_OK;
         }
