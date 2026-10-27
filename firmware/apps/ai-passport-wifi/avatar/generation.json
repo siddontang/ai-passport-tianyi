@@ -1,0 +1,13 @@
+{
+  "generated_with": "built-in image_gen",
+  "reference": "reference.png",
+  "output": "tianyi-expressions.png",
+  "prompt": "Use case: identity-preserve. Create a production animation sprite sheet for a 240x320 embedded AI companion screen, using the attached portrait as the exact character reference. Output a square image with a perfectly regular 2 by 2 grid of FOUR equal square panels, filling all four quadrants edge-to-edge with no gaps, borders, labels, text or watermark. Each quadrant shows the SAME centered head-and-shoulders crop at the EXACT same scale and position, with the same pale mint background, silver-gray braided-loop hairstyle, green eyes, teal music hairpin, white/aqua clothing and headset. Preserve the character's design, cel-shaded anime style and warm personality. Keep the full hairstyle within the frame with a little top margin and include the shoulders. The camera, background and pose MUST stay fixed across all four panels; change ONLY eyelids and mouth. TOP LEFT: eyes open, relaxed happy CLOSED-mouth smile (idle). TOP RIGHT: same closed-mouth smile, both eyes softly CLOSED mid-blink. BOTTOM LEFT: eyes open, SMALL open mouth while speaking a syllable. BOTTOM RIGHT: eyes open, slightly WIDER open mouth while speaking another syllable. Not a new hairstyle or composition per tile. This is a four-frame animation asset atlas, not a comic or mockup. No UI, text, decorations beyond the identical existing mint background. Crisp details that still read clearly when each tile is reduced to 216x216 pixels.",
+  "frame_order": [
+    "smile",
+    "blink",
+    "talk-small",
+    "talk-open"
+  ],
+  "atlas_sha256": "f839b2d7a0f9945ffcbb45a7b5c478cfc240c9f765d67b9605c0f1e3f068c4ec"
+}

@@ -59,6 +59,12 @@ esp_err_t esp_http_client_perform(TestHttp* client) {
     const Expected& next = expected[consumed++];
     CHECK(client->config.method == next.method);
     CHECK(client->url == "https://platform.example.test" + next.path);
+    // The actual ESP-IDF sender cannot split its request line across buffers.
+    const std::string method = next.method == HTTP_METHOD_GET ? "GET" :
+                               next.method == HTTP_METHOD_POST ? "POST" : "DELETE";
+    const std::string first_write = method + " " + next.path +
+                                   " HTTP/1.1\r\nHost: platform.example.test\r\n";
+    CHECK(first_write.size() < static_cast<size_t>(client->config.buffer_size_tx));
     CHECK(client->headers["X-Device-Auth-Key"] == device_key);
     CHECK(client->headers.count("Authorization") == 0 && client->headers.count("X-Token") == 0);
     if (!next.body.empty()) CHECK(client->body == next.body);
@@ -70,8 +76,9 @@ esp_err_t esp_http_client_perform(TestHttp* client) {
         const cJSON* input = cJSON_GetObjectItemCaseSensitive(config, "input");
         const cJSON* output = cJSON_GetObjectItemCaseSensitive(config, "output");
         const char* encoding = CONFIG_AGENT_LINK_REALTIME_OPUS ? "opus" : "pcm16";
+        const char* output_encoding = CONFIG_AGENT_LINK_REALTIME_OPUS || CONFIG_AGENT_LINK_REALTIME_OPUS_DOWNLINK ? "opus" : "pcm16";
         CHECK(std::strcmp(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(input, "encoding")), encoding) == 0);
-        CHECK(std::strcmp(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(output, "encoding")), encoding) == 0);
+        CHECK(std::strcmp(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(output, "encoding")), output_encoding) == 0);
         CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(input, "sampleRate")) == 16000);
         CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(output, "sampleRate")) == 24000);
         cJSON_Delete(body);
@@ -141,6 +148,8 @@ int main() {
     CHECK(count == 1 && total == 2 && std::strcmp(sessions[0].id, session) == 0);
 #if CONFIG_AGENT_LINK_REALTIME_OPUS
     const char* grant = R"({"data":{"grant":{"websocket_url":"wss://voice.example.test/socket","connect_token":"test-one-use-token","audio_config":{"input":{"encoding":"opus","sampleRate":16000,"channels":1,"packetDurationMs":20},"output":{"encoding":"opus","sampleRate":24000,"channels":1,"packetDurationMs":20}}}}})";
+#elif CONFIG_AGENT_LINK_REALTIME_OPUS_DOWNLINK
+    const char* grant = R"({"data":{"grant":{"websocket_url":"wss://voice.example.test/socket","connect_token":"test-one-use-token","audio_config":{"input":{"encoding":"pcm16","sampleRate":16000,"channels":1},"output":{"encoding":"opus","sampleRate":24000,"channels":1,"packetDurationMs":20}}}}})";
 #else
     const char* grant = R"({"data":{"grant":{"websocket_url":"wss://voice.example.test/socket","connect_token":"test-one-use-token","audio_config":{"input":{"encoding":"pcm16","sampleRate":16000,"channels":1},"output":{"encoding":"pcm16","sampleRate":24000,"channels":1}}}}})";
 #endif
@@ -148,12 +157,22 @@ int main() {
     CHECK(cloud_platform_grant(7, session, false, url, sizeof url, token, sizeof token,
                                &audio, &http_status) == ESP_OK);
     CHECK(http_status == 200 && audio.input_opus == !!CONFIG_AGENT_LINK_REALTIME_OPUS &&
-          audio.output_opus == !!CONFIG_AGENT_LINK_REALTIME_OPUS);
+          audio.output_opus == !!(CONFIG_AGENT_LINK_REALTIME_OPUS || CONFIG_AGENT_LINK_REALTIME_OPUS_DOWNLINK));
     Expect(HTTP_METHOD_POST, "/api/agents/7/actions/realtime_voice/realtime-refresh", grant);
     CHECK(cloud_platform_grant(7, session, true, url, sizeof url, token, sizeof token,
                                &audio, &http_status) == ESP_OK);
     Expect(HTTP_METHOD_DELETE, "/api/agents/7/actions/realtime_voice/realtime-grant/owned-session", "", "", 204);
     cloud_platform_end_grant(7, session);
+    // Legacy platform envelopes must preserve this upstream conflict so the
+    // realtime worker can use its existing refresh path after a reboot.
+    Expect(HTTP_METHOD_POST, "/api/agents/7/actions/realtime_voice/realtime-grant",
+           R"({"code":1002,"message":"upstream [409]: realtime_connection_live","data":{}})");
+    CHECK(cloud_platform_grant(7, session, false, url, sizeof url, token, sizeof token,
+                               &audio, &http_status) == ESP_ERR_INVALID_RESPONSE);
+    CHECK(http_status == 409);
+    Expect(HTTP_METHOD_POST, "/api/agents/7/actions/realtime_voice/realtime-refresh", grant);
+    CHECK(cloud_platform_grant(7, session, true, url, sizeof url, token, sizeof token,
+                               &audio, &http_status) == ESP_OK);
     Expect(HTTP_METHOD_DELETE, "/api/agents/7/actions/realtime_voice/conversations/owned-session", "", "", 204);
     CHECK(agent_link_platform_delete_conversation(7, session) == ESP_OK);
     std::puts("PASS: conversation lifecycle, negotiated audio grant/refresh and cancellation use device authentication");
@@ -192,6 +211,60 @@ int main() {
     CHECK(count == 3 && total == 23);
     CHECK(std::strcmp(sessions[0].id, "s18") == 0 && std::strcmp(sessions[2].id, "s20") == 0);
     std::puts("PASS: cursor pagination spans the first 20 results without skipping boundary conversations");
+
+    // The live platform returned two rows plus a 323-byte opaque cursor for limit=3.
+    // Also exercise escaped cursors whose request URL exceeds the old 800-byte buffer.
+    for (const size_t length : {323u, 1024u}) {
+        const std::string cursor(length, length == 323 ? 'a' : '+');
+        std::string encoded;
+        for (char ch : cursor) encoded += ch == '+' ? "%2B" : "a";
+        const std::string first = R"({"code":0,"success":true,"data":{"items":[{"conversation_id":"recent"},{"conversation_id":"older"}],"has_more":true,"next_cursor":")" + cursor + R"("}})";
+        Expect(HTTP_METHOD_GET, kListPath.c_str(), first.c_str());
+        Expect(HTTP_METHOD_GET, (kListPath + "&cursor=" + encoded).c_str(),
+               R"({"data":{"items":[{"conversation_id":"oldest"}],"has_more":false}})");
+        CHECK(agent_link_platform_conversations(7, 0, sessions, 3, &count, &total) == ESP_OK);
+        CHECK(count == 3 && total == 3);
+        CHECK(std::strcmp(sessions[0].id, "recent") == 0 && std::strcmp(sessions[2].id, "oldest") == 0);
+    }
+    std::puts("PASS: long opaque and URL-escaped cursors preserve all conversations");
+
+    // Agent filtering can leave an empty page while the upstream cursor advances.
+    const std::string filtered_cursor(323, 'f');
+    const std::string empty_page = R"({"data":{"items":[],"has_more":true,"next_cursor":")" + filtered_cursor + R"("}})";
+    Expect(HTTP_METHOD_GET, kListPath.c_str(), empty_page.c_str());
+    Expect(HTTP_METHOD_GET, (kListPath + "&cursor=" + filtered_cursor).c_str(),
+           R"({"data":{"items":[],"has_more":true,"next_cursor":"last-page"}})");
+    Expect(HTTP_METHOD_GET, (kListPath + "&cursor=last-page").c_str(),
+           R"({"data":{"items":[{"conversation_id":"owned-after-filter"}],"has_more":false}})");
+    CHECK(agent_link_platform_conversations(7, 0, sessions, 3, &count, &total) == ESP_OK);
+    CHECK(count == 1 && total == 1 && std::strcmp(sessions[0].id, "owned-after-filter") == 0);
+    Expect(HTTP_METHOD_GET, kListPath.c_str(), empty_page.c_str());
+    Expect(HTTP_METHOD_GET, (kListPath + "&cursor=" + filtered_cursor).c_str(),
+           R"({"data":{"items":[],"has_more":false,"next_cursor":null}})");
+    CHECK(agent_link_platform_conversations(7, 0, sessions, 3, &count, &total) == ESP_OK);
+    CHECK(count == 0 && total == 0);
+    const char* stuck_empty_page = R"({"data":{"items":[],"has_more":true,"next_cursor":"stuck"}})";
+    Expect(HTTP_METHOD_GET, kListPath.c_str(), stuck_empty_page);
+    Expect(HTTP_METHOD_GET, (kListPath + "&cursor=stuck").c_str(), stuck_empty_page);
+    CHECK(agent_link_platform_conversations(7, 0, sessions, 3, &count, &total) == ESP_ERR_INVALID_RESPONSE);
+    CHECK(count == 0 && total == 0);
+    std::puts("PASS: empty filtered pages advance, wholly empty lists succeed, stuck cursors fail");
+
+    const std::string excessive_cursor(1025, 'z');
+    const std::string excessive_page = R"({"data":{"items":[{"conversation_id":"recent"}],"has_more":true,"next_cursor":")" + excessive_cursor + R"("}})";
+    Expect(HTTP_METHOD_GET, kListPath.c_str(), excessive_page.c_str());
+    captured_logs.clear();
+    CHECK(agent_link_platform_conversations(7, 0, sessions, 3, &count, &total) == ESP_ERR_INVALID_RESPONSE);
+    CHECK(count == 0 && total == 0);
+    CHECK(captured_logs.find("invalid pagination") != std::string::npos);
+    CHECK(captured_logs.find(excessive_cursor) == std::string::npos);
+
+    const char* repeated_page = R"({"data":{"items":[{"conversation_id":"recent"}],"has_more":true,"next_cursor":"same"}})";
+    Expect(HTTP_METHOD_GET, kListPath.c_str(), repeated_page);
+    Expect(HTTP_METHOD_GET, (kListPath + "&cursor=same").c_str(), repeated_page);
+    CHECK(agent_link_platform_conversations(7, 0, sessions, 3, &count, &total) == ESP_ERR_INVALID_RESPONSE);
+    CHECK(count == 0 && total == 0);
+    std::puts("PASS: oversized and repeated cursors fail safely without logging cursor contents");
 
     configuration = cJSON_Parse(R"({"agent":{"id":8,"name":"Rebound agent","capabilities":{"realtime_voice":{}}}})");
     cloud_platform_set_bound_agent(configuration); cJSON_Delete(configuration);

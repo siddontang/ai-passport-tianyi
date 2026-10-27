@@ -89,6 +89,12 @@ Desktop.ini
 **/.vscode/ipch/
 .cache/
 
+# Local device backups, firmware packages and diagnostic captures
+/output/
+.env
+.env.*
+!.env.example
+
 # Claude Code local settings
 .claude/
 **/.claude/

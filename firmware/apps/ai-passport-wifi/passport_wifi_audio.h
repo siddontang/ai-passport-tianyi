@@ -18,10 +18,12 @@ public:
     void Play(const uint8_t* pcm, size_t bytes);
     void End() { finished_.store(true); }
     void Reset() { generation_.fetch_add(1); }
-    void Enable(bool enabled) { enabled_.store(enabled); }
+    void Enable(bool enabled) { if (enabled) microphone_failed_.store(false); enabled_.store(enabled); }
+    bool MicrophoneFailed() const { return microphone_failed_.load(); }
     void Stop() { enabled_.store(false); Reset(); }
     bool Speaking() const { return echo_.Muted(esp_timer_get_time()); }
 private:
+    static size_t BufferLevel(void* context);
     static void PlayEntry(void* ctx) { static_cast<PassportWifiAudio*>(ctx)->PlayLoop(); }
     static void MicEntry(void* ctx) { static_cast<PassportWifiAudio*>(ctx)->MicLoop(); }
     void PlayLoop();
@@ -34,5 +36,6 @@ private:
     std::mutex writer_;
     std::atomic<uint32_t> generation_{0}, cleared_{0};
     std::atomic<bool> finished_{false}, enabled_{false};
+    std::atomic<bool> microphone_failed_{false};
     kc_audio::SpeakerEchoGuard echo_;
 };

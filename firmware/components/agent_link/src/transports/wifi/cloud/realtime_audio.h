@@ -5,6 +5,16 @@
 
 namespace agentlink::realtime {
 
+// Retain headroom for a PCM frame while honoring the real playback queue,
+// including its prebuffer/rebuffer pauses. Wall-clock pacing cannot see those.
+inline bool PlaybackRoom(size_t queued, size_t incoming, uint32_t capacity_ms) {
+    const uint64_t capacity = uint64_t(capacity_ms) * 32;
+    if (incoming > capacity) return false;
+    const uint64_t target = capacity * 3 / 4;
+    const uint64_t limit = incoming > target ? incoming : target;
+    return queued <= limit && incoming <= limit - queued;
+}
+
 // Keep PCM frame boundaries independent of the sizes passed to stream_write().
 template <size_t FrameBytes>
 class PcmFrames {
@@ -109,6 +119,9 @@ public:
     }
     size_t Size() const { return size_; }
     unsigned Opcode() const { return opcode_; }
+    // A growable owner may move the storage between Append calls.
+    void Rebind(uint8_t* buffer, size_t capacity) { buffer_ = buffer; capacity_ = capacity; }
+    bool Active() const { return active_; }
 
 private:
     uint8_t* buffer_;

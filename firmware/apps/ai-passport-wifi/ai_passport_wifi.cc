@@ -188,6 +188,7 @@ private:
         saved_agent_ = agent_; Save(); return true;
     }
     void StartCall() {
+        ESP_LOGI(TAG, "call setup begin");
         if (!audio_.Ready()) { snprintf(message_, sizeof message_, "Audio unavailable. Restart device."); return; }
         if (!SyncAgent(true)) return;
         if (agent_link_state() != AGENT_STATE_CONNECTED) {
@@ -210,6 +211,8 @@ private:
         calling_ = true; active_ = false; requested_at_ = esp_timer_get_time();
     }
     void Handle(Gesture gesture) {
+        if (gesture == Gesture::Click || gesture == Gesture::Hold)
+            ESP_LOGI(TAG, "OK gesture handled: %u", unsigned(gesture));
         message_[0] = 0;
         if (gesture == Gesture::Hold) { if (page_ == Page::Home) Menu(); else SetPage(Page::Home); return; }
         if (page_ == Page::Home) {
@@ -250,7 +253,9 @@ private:
                           session_[0] ? "Conversation selected" : "OK selects latest or creates one", volume_.load());
             passport_wifi::SetContent(active_ ? (audio_.Speaking() ? "Agent speaking" : "Listening") :
                                       calling_ ? "Starting call" : "Agent Link", detail,
-                                      calling_ ? "OK: end call" : "OK: call   Hold OK: menu");
+                                      calling_ ? "OK: end   Hold: menu" : "OK: call   Hold: menu",
+                                      message_[0] ? passport_wifi::View::Text : passport_wifi::View::Portrait,
+                                      volume_.load());
         }
     }
     void ControlLoop() {
@@ -267,7 +272,9 @@ private:
             }
             if (calling_) {
                 if (active_ && !audio_.Enabled()) {
-                    EndCall(); snprintf(message_, sizeof message_, "Microphone stopped. Press OK to retry.");
+                    const bool microphone_failed = audio_.MicrophoneFailed();
+                    EndCall(); snprintf(message_, sizeof message_, "%s Press OK to retry.",
+                                        microphone_failed ? "Microphone could not start." : "Voice disconnected.");
                 } else if (agent_link_state() == AGENT_STATE_READY) {
                     if (!active_) { audio_.Enable(true); active_ = true; }
                 } else if (active_ || agent_link_state() == AGENT_STATE_DISCONNECTED || now - requested_at_ > 30000000) {
@@ -293,6 +300,8 @@ private:
                 if (hardware_.audio_ready) (void)hardware_.codec.SetVolume(volume);
                 volume_.store(volume);
             } else if (gesture != Gesture::None) {
+                if (gesture == Gesture::Click || gesture == Gesture::Hold)
+                    ESP_LOGI(TAG, "OK gesture posted: %u", unsigned(gesture));
                 Input input{gesture, view_.load()}; (void)xQueueSend(events_, &input, 0);
             }
             vTaskDelay(pdMS_TO_TICKS(10));

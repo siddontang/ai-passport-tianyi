@@ -38,6 +38,58 @@ the microphone only after `session.ready`. Reconnection needs a fresh grant.
 Logs omit URLs with credentials, request bodies and saved device/session IDs.
 Nonzero business codes fail even when HTTP status is 200.
 
+Outgoing text frames (audio and session controls) combine the masked WebSocket
+header and payload in a reusable buffer for one TLS write, with a fresh random
+mask per frame. S3/S31 TLS writes use a 3000 ms transport timeout. Slow successful
+writes log wire size and write duration, at most once a second. A failed or partial frame is never replayed
+on that stream. Platform calls retry transport failures at most twice per call,
+after 2 and 4 seconds, releasing the previous grant and obtaining a fresh token.
+Microphone capture pauses during recovery and queued audio is discarded; speech
+during the interruption must be repeated. Leaving the call cancels recovery.
+Explicit server session errors/close frames, invalid media and grant rejection
+do not trigger automatic retries. MQTT/direct grants retain manual reconnection.
+Logs include operation/result, errno, socket/TLS errors, WiFi association/RSSI,
+internal heap availability and uplink queue duration, without server reason text.
+
+The C3 path sends an unsolicited masked Pong every ten seconds when no TLS write
+is pending, as permitted by RFC 6455 section 5.5.3. The gateway updates liveness
+on Pong, not client Ping. This keeps the uplink heartbeat independent of server
+Pings queued behind a long reply that the device consumes at playback speed.
+Received Pings still receive matching-payload Pongs. The receive timeout and
+write-stall limit remain active. `test_realtime_keepalive.py` exercises the actual
+send branch; its optional `--gateway-source` replays generated frames through the
+gateway's heartbeat/Pong method bodies with simulated delayed reception.
+
+C3 captions distinguish user and assistant transcripts. User text is delivered
+immediately. Assistant text goes through `realtime_captions.h`, using decoded
+sample counts minus the board's actual PCM queue and its bounded I2S tail.
+The scheduler never waits, buffers audio, or writes to the network. It preserves
+UTF-8 boundaries, limits retained text to 1,024 UTF-16 units, suppresses stale
+response IDs and clears on interruption. Because transcript events have no word
+timestamps, pacing is approximate; the remaining final text is released only
+after the reply audio drains. `test_realtime_captions.py` checks advance full
+transcripts, a 150-second story, stalled playback, response changes and bounds;
+`test_platform_api.py --c3 --voice-memory` also exercises role routing and
+playback gating through the production `Call` implementation.
+
+Continuous Opus upload coalesces up to three complete WebSocket messages in one
+TLS write; each retains its own JSON, Opus packet and random mask. The first
+queued packet waits at most 40 ms to form a batch, excluding network stalls.
+PCM and activity-control messages retain their existing packet boundaries.
+Before dequeuing uplink audio, the worker polls writability without blocking;
+while the socket is backpressured it continues receiving replies and checks a
+3-second stall deadline. On S3/S31 a write can still block after the readiness check.
+On C3, TLS remains nonblocking after verified connection and HTTP upgrade.
+Partial writes retain the exact masked buffer and retry only its remaining
+suffix on later worker passes, with a 3-second deadline. Reads and codec work
+continue during backpressure. Partial frame headers/payloads are retained too,
+including control frames interleaved between message fragments. The upgrade
+validates HTTP 101, Upgrade/Connection, the accept digest and the subprotocol;
+unnegotiated extensions and masked server frames are rejected.
+The `writes` counter distinguishes TLS audio writes from the `ws` message count;
+`send` reports average/maximum time per TLS write. Network stalls and queue
+overflows can still lose microphone audio; coalescing does not guarantee delivery.
+
 ## Audio and workers
 
 `cloud_platform.cc` owns device-authenticated APIs. `cloud_realtime.cc` owns
@@ -84,9 +136,50 @@ Its full-refresh display runs on a separate worker.
 AI Passport uses OK to start/end a continuous call and holds OK for its conversation
 menu. UP/DOWN adjust volume, or move through menus. It restores the selected
 conversation for the same bound Agent; the first call selects the latest existing
-conversation or creates one if none exist. Its ESP32-C3 profile requests PCM16,
-uses a raster display and no BLE, and limits incoming complete WebSocket messages
-to 16 KB. Oversized messages fail the call instead of being truncated. See the
+conversation or creates one if none exist. Its ESP32-C3 profile requests Opus,
+disables MQTT to reserve RAM for audio (HTTP heartbeat/configuration polling and
+HTTP-granted WSS voice remain enabled; MQTT push/OTA commands are unavailable),
+uses a raster display and no BLE. One resident 40 KB worker is created at SDK
+startup and owns network I/O plus Opus encoding/decoding. Its stack is retained
+between calls, replacing the separate 12 KB network and 40 KB codec stacks.
+The board's capture/playback workers remain independent. Playback pacing also
+pumps microphone frames and pending TLS writes; full uplink queues never block
+the shared worker. After the verified WSS upgrade, continuous Opus calls reserve
+one 25 KB workspace. C3 overrides the codec library's weak module allocator only
+for that voice worker; other tasks use their normal allocator. Both wrappers and
+core states reuse the reservation, so reopening a codec never needs a new large
+system-heap block. Failure before a handle is published rolls back the allocator
+transaction. The reservation is freed at call teardown.
+Continuous C3 Opus calls follow the application's half-duplex policy: listening
+retains the encoder, replies retain the decoder, and transitions close one before
+opening the other. During a reply, microphone frames upload cached valid Opus
+silence to preserve endpointing cadence. Interruption/reply completion restores
+the encoder. Actual queued PCM feedback controls the 75% playback watermark,
+including prebuffer/rebuffer pauses and asynchronous queue resets. Boards without
+feedback retain clock-based pacing. Capture/playback tasks remain resident. Encoded queues hold two
+packets with two-packet batching; the decoder's PCM buffer matches the negotiated
+20 ms duration. TLS uses 1024-byte outbound records and preserves the standard
+16384-byte incoming record limit. With dynamic TLS buffers enabled, C3 selects
+the SDK's `ESP_TLS_DYN_BUF_RX_STATIC` strategy: the handshake stays dynamic, then
+one full RX buffer is reserved before Opus and reused until disconnect. On IDF
+5.5.4 the linked allocation is 17058 bytes including the SDK header. The 16 KB
+message buffer is also reserved after upgrade, before codec setup, and retained
+through all replies. Ordinary audio-delta objects are validated without allocation
+and Base64 is decoded in the original writable message, including ASCII JSON
+escapes. Other events and unsupported fast-path forms keep the cJSON path.
+The AI Passport profile disables both general and RX WiFi IRAM acceleration;
+the measured link layout reclaims 11776 additional SRAM bytes from RX acceleration.
+This trades bulk throughput for receive/codec headroom; scheduling still needs
+physical acceptance. Per-call state is released with the connection. No large task stack is allocated
+mid-call. A C3 memory lock excludes other HTTPS requests
+through voice teardown; periodic HTTP heartbeat/configuration polling defers
+while a call is active, then resumes with overdue deadlines. Platform binding
+changes are refreshed after the call ends.
+Queues use internal RAM when
+PSRAM is unavailable. C3 uses 2 KB message storage during HTTP upgrade and reserves
+the full 16 KB before enabling audio, with no playback-time growth/shrink cycle.
+Other targets retain their existing dynamic message storage. Oversized messages fail the call instead of
+being truncated. See the
 [board guide](../../boards/ai-passport/README.md).
 
 ## Validation status
@@ -97,8 +190,16 @@ conversation listing, an existing conversation's grant, verified TLS/WSS,
 code 1002 (`agent_template_unavailable`). Deletion, real audio and complete
 physical-device acceptance were not covered by those checks.
 
-Relevant host checks are `firmware/tests/test_platform_api.py` and
-`firmware/tests/test_stopwatch_controls.py`. Keep these distinct from device tests.
+Relevant host checks are `firmware/tests/test_platform_api.py` (including
+`--c3 --voice-worker` and `--c3 --voice-memory`), `firmware/tests/test_realtime_recovery.py`,
+`firmware/tests/test_tls_receive_memory.py --idf-path <IDF>` (actual SDK RX allocation
+functions with a bounded allocator; decryption/networking are not simulated),
+`firmware/tests/test_passport_wifi.py` and `firmware/tests/test_stopwatch_controls.py`.
+Keep these distinct from device tests. The resident C3 task and nonblocking
+transport require physical acceptance for long calls, jitter, reconnects,
+playback underruns and worst-case stack/heap headroom.
+AI Passport's Chinese raster font is derived from the common font image and
+embedded in its application; it uses no separate flash partition or TTF cache.
 
 ## Other grant sources
 

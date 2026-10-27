@@ -12,12 +12,14 @@
 #include "cloud_clock.h"
 #include "cloud_credential.h"
 #include "cloud_mqtt.h"
+#include "cloud_memory.h"
 #include "device_identity.h"
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -25,6 +27,11 @@
 
 namespace {
 constexpr const char* TAG = "agent_link.cloud";
+#if CONFIG_AGENT_LINK_MQTT_ENABLE
+constexpr bool kMqttEnabled = true;
+#else
+constexpr bool kMqttEnabled = false;
+#endif
 
 // bind-status returns immediately (short poll), so this is a plain interval.
 constexpr uint32_t kBindPollMs = 3000;
@@ -294,7 +301,7 @@ void OnMqttRefused(int /*connack_code*/, void* /*ctx*/) {
 // Stop the client, and drop any refusal it reported that is still pending: once the stop returns
 // its task is gone, so the refusal is stale and must not tear down the next client.
 void StopMqtt() {
-    cloud_mqtt_stop();
+    if (kMqttEnabled) cloud_mqtt_stop();
     ulTaskNotifyValueClear(nullptr, kNotifyMqttRefused);
 }
 
@@ -334,46 +341,52 @@ Leave StayOnline() {
         if (!NetReady())            { why = Leave::kNoNetwork; break; }
         const int64_t now = esp_timer_get_time();
 
-        const bool renew = !s_token_ok || (s_token_renew && now >= s_token_renew);
-        if (renew && now >= s_token_retry) {
-            const TokenResult t = FetchToken();
-            if (t == TokenResult::kKeyRevoked) { why = Leave::kKeyGone; break; }
-            if (t == TokenResult::kNoAgent)    { why = Leave::kNoAgent; break; }
-            if (t == TokenResult::kOk && cloud_mqtt_started()) {
-                ESP_LOGI(TAG, "token renewed — reconnecting MQTT with it");
-                StopMqtt();
+        if (kMqttEnabled) {
+            const bool renew = !s_token_ok || (s_token_renew && now >= s_token_renew);
+            if (renew && now >= s_token_retry) {
+                const TokenResult t = FetchToken();
+                if (t == TokenResult::kKeyRevoked) { why = Leave::kKeyGone; break; }
+                if (t == TokenResult::kNoAgent)    { why = Leave::kNoAgent; break; }
+                if (t == TokenResult::kOk && cloud_mqtt_started()) {
+                    ESP_LOGI(TAG, "token renewed — reconnecting MQTT with it");
+                    StopMqtt();
+                }
             }
-        }
-        cloud_mqtt_callbacks_t cb = {};
-        cb.on_refused  = &OnMqttRefused;
-        cb.on_downlink = s_cfg.on_downlink;
-        cb.ctx         = s_cfg.ctx;
-        if (s_token_ok && !cloud_mqtt_started() && cloud_mqtt_start(s_token, &cb) != ESP_OK) {
-            // Unusable as issued (a protocol without TLS), or no memory: ask for another later.
-            s_token_ok    = false;
-            s_token_retry = now + static_cast<int64_t>(kFaultRetryMs) * 1000;
-        }
-
-        if (now >= next_beat) {
-            next_beat = now + static_cast<int64_t>(kHeartbeatMs) * 1000;
-            cloud_api_err_t hb = {};
-            if (cloud_api_heartbeat(cloud_cred_auth_key(), &hb) != ESP_OK) {
-                if (HandleRevoked(hb)) { why = Leave::kKeyGone; break; }
-                // Anything else: stay online and retry on the next beat.
-                ESP_LOGW(TAG, "heartbeat failed (code=%d) — staying online", hb.code);
+            cloud_mqtt_callbacks_t cb = {};
+            cb.on_refused  = &OnMqttRefused;
+            cb.on_downlink = s_cfg.on_downlink;
+            cb.ctx         = s_cfg.ctx;
+            if (s_token_ok && !cloud_mqtt_started() && cloud_mqtt_start(s_token, &cb) != ESP_OK) {
+                // Unusable as issued (a protocol without TLS), or no memory: ask for another later.
+                s_token_ok    = false;
+                s_token_retry = now + static_cast<int64_t>(kFaultRetryMs) * 1000;
             }
         }
 
-        if (now >= next_auth) {
-            next_auth = now + static_cast<int64_t>(kHeartbeatMs) * 1000;
-            cloud_api_err_t refreshed = {};
-            if (cloud_api_auth(cloud_cred_auth_key(), StaMac(), agent_link_ota_running_version(),
-                               s_agent_json, kAgentJsonCap, &refreshed) != ESP_OK) {
-                if (HandleRevoked(refreshed)) { why = Leave::kKeyGone; break; }
-                if (refreshed.code == CLOUD_API_NO_AGENT) {
-                    Publish(AGENT_CLOUD_NO_AGENT, &refreshed);
-                    why = Leave::kNoAgent;
-                    break;
+        // A live C3 Opus call owns the RAM needed for a second TLS handshake.
+        // Leave deadlines due while busy, then refresh once the call releases it.
+        if (agentlink::cloud::NetworkMemoryLock polling(false); polling) {
+            if (now >= next_beat) {
+                next_beat = now + static_cast<int64_t>(kHeartbeatMs) * 1000;
+                cloud_api_err_t hb = {};
+                if (cloud_api_heartbeat(cloud_cred_auth_key(), &hb) != ESP_OK) {
+                    if (HandleRevoked(hb)) { why = Leave::kKeyGone; break; }
+                    // Anything else: stay online and retry on the next beat.
+                    ESP_LOGW(TAG, "heartbeat failed (code=%d) — staying online", hb.code);
+                }
+            }
+
+            if (now >= next_auth) {
+                next_auth = now + static_cast<int64_t>(kHeartbeatMs) * 1000;
+                cloud_api_err_t refreshed = {};
+                if (cloud_api_auth(cloud_cred_auth_key(), StaMac(), agent_link_ota_running_version(),
+                                   s_agent_json, kAgentJsonCap, &refreshed) != ESP_OK) {
+                    if (HandleRevoked(refreshed)) { why = Leave::kKeyGone; break; }
+                    if (refreshed.code == CLOUD_API_NO_AGENT) {
+                        Publish(AGENT_CLOUD_NO_AGENT, &refreshed);
+                        why = Leave::kNoAgent;
+                        break;
+                    }
                 }
             }
         }
@@ -382,7 +395,7 @@ Leave StayOnline() {
         // are polled.
         uint32_t bits = 0;
         if (xTaskNotifyWait(0, UINT32_MAX, &bits, pdMS_TO_TICKS(kNetPollMs)) == pdTRUE &&
-            (bits & kNotifyMqttRefused)) {
+            kMqttEnabled && (bits & kNotifyMqttRefused)) {
             HandleMqttRefused();
         }
     }
@@ -464,13 +477,15 @@ esp_err_t cloud_session_start(const cloud_session_config_t* cfg) {
         if (!s_agent_json) s_agent_json = static_cast<char*>(calloc(1, kAgentJsonCap));
         if (!s_agent_json) return ESP_ERR_NO_MEM;
     }
-    if (!s_token) {
+    if (kMqttEnabled && !s_token) {
         // Only this task touches it, so PSRAM will do, and internal RAM is the scarcer.
         s_token = static_cast<cloud_mqtt_token_t*>(heap_caps_calloc(1, sizeof *s_token, MALLOC_CAP_SPIRAM));
         if (!s_token) s_token = static_cast<cloud_mqtt_token_t*>(calloc(1, sizeof *s_token));
         if (!s_token) return ESP_ERR_NO_MEM;
     }
     s_token_ok = false;
+    if (!kMqttEnabled)
+        ESP_LOGI(TAG, "MQTT disabled by profile; HTTP polling and realtime WSS remain enabled");
 
     memset(&s_status, 0, sizeof s_status);
     s_status.state = AGENT_CLOUD_IDLE;

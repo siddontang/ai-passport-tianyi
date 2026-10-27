@@ -75,15 +75,68 @@ in the platform console, and bind an Agent supporting realtime voice.
   can select another conversation or create one; it does not delete conversations.
 - Loss of network ends the call and stops capture. Connectivity retries through
   the SDK; press OK again after recovery to resume with a fresh voice grant.
-- Speaker playback and its short echo tail upload silence. This is half-duplex
-  feedback prevention, not acoustic echo cancellation or spoken interruption.
+- Speaker playback and its echo tail suppress microphone feedback. The official
+  C3 voice worker sends cached Opus silence during replies and resumes microphone
+  encoding after the speaker drains. This is half-duplex feedback prevention.
 
-PCM16 input is 16 kHz mono; output is negotiated at 24 kHz and converted by the
-SDK to the codec's 16 kHz. C3 queues are bounded, the speaker buffer is 8 KB,
-and complete incoming WebSocket messages are limited to 16 KB. Larger messages
-fail explicitly. The screen renders in a shared 240x4 stripe without LVGL.
-The small raster fonts cover Latin text; non-Latin answer text shows an explicit
-placeholder while spoken replies remain available. Chinese typography is pending.
+The pixel.14 build uses the upstream audio implementation from
+`9f664fc028a664a47789506802aecfb0b69b7e18` (`fix(ai-passport-wifi):audio link fixed`).
+That implementation corresponds to the shared codec workspace, compressed input
+and output, and C3 network path found in the official 2.2.1 Build 2 package.
+The earlier main-based pixel builds omitted those official fixes.
+Pixel.15 adds the C3 unsolicited-Pong keepalive described in the SDK notes. It
+addresses the gateway's Pong-based timeout during long paced replies, without
+changing the pixel.14 codec, buffer or display configuration.
+
+Both directions use Opus in 20 ms packets; output is 24 kHz/24 kbps and is decoded
+at the speaker's 16 kHz. One resident C3 worker owns network and codec processing,
+with a 25 KB reserved codec workspace shared between encoder and decoder. The
+profile disables MQTT while retaining HTTP activation, binding and voice grants.
+TLS writes progress without blocking the receiver; the full 16 KB receive record
+is reserved after the handshake. See the SDK [realtime notes](../../components/agent_link/REALTIME.md)
+for the upstream memory, framing, recovery and playback-buffer contract.
+
+The screen renders in a shared 240x4 stripe without LVGL. Pixel.16 keeps user
+transcripts immediate and advances assistant text with released PCM samples,
+accounting for the software queue and a bounded 90 ms I2S tail. Audio stalls
+therefore stop subtitle advancement. Response IDs and interruption reset prevent
+old replies from replacing current input. The current protocol has no word
+timestamps: speech rate is estimated and refined from plausible incremental
+text/audio anchors, so this is approximate synchronization, not word alignment.
+The allocation-free scheduler occupies 2,216 bytes and holds 1,024 UTF-16 units;
+cumulative updates reclaim already shown prefixes. An unusually large single
+advance transcript can exceed that window; the diagnostic reports overflow
+and retains its beginning instead of jumping to its end. Glyphs use the bundled OFL Noto Sans SC font,
+including all 6,763 GB2312 Hanzi, stored in mapped flash. Layout is calculated once
+per text update and subtitle updates share the 8 fps display cap. Menus keep the
+small Latin fonts. Experimental pixel.13 flow control, caption timing and audio
+allocation changes were archived before importing the official audio path.
+
+The WiFi home screen uses a Tianyi-inspired pixel portrait with blinking,
+listening feedback and amplitude-driven mouth patches. Mouth movement follows PCM
+successfully written to the speaker and expires after silence or reset; it is not
+phoneme-level lip synchronization. Four 64x64 RGB565 sprites occupy 32,768 bytes
+of mapped flash, scale 3x with nearest-neighbor sampling, and reuse the existing
+1,920-byte DMA stripe without a framebuffer. The body remains fixed. Mouth and
+blink transitions transfer 11,520 and 17,280 display bytes respectively, compared
+with 107,520 bytes for the previous portrait transition. Animation is capped at
+8 fps. Caption/status changes redraw text regions without repainting the portrait.
+Periodic logs count actual display stripes and bytes; this UI optimization does
+not establish that screen load caused the realtime voice send timeout.
+Menus, actionable errors and provisioning keep their text view. Build version
+`2.2.1-tianyi.pixel.1` introduced this custom UI. Later pixel builds retain it.
+The prior full-color source atlas
+remains in `apps/ai-passport-wifi/avatar/` alongside the pixel atlas and its prompt.
+
+The pixel source atlas is `apps/ai-passport-wifi/avatar/tianyi-pixel-expressions.png`. Regenerate
+the immutable pixel asset with `python firmware/tools/pack_passport_avatar.py` from
+the repository root (Pillow required). Run `python firmware/tests/test_passport_avatar.py`
+for host checks of silence expiry, audio levels, animation states, incremental
+regions, text layout and bounds of the actual renderer. Add `--preview` to export
+an illustrative idle/listening/speaking sequence under the ignored `.cache/` folder.
+Regenerate the subtitle font with `python firmware/tools/pack_passport_font.py`
+(Pillow and fontTools required), or use `--check` to verify its generated source.
+The font license remains in `firmware/boards/common/fonts/OFL.txt`.
 
 The WiFi application contains no BLE exchange, NFC web integration or contact
 management. CW2017 battery reporting is not advertised by this version.

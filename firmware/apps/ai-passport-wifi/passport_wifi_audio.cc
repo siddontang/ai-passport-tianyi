@@ -1,4 +1,6 @@
 #include "passport_wifi_audio.h"
+#include "passport_avatar.h"
+#include "passport_wifi_ui.h"
 
 #include <cstring>
 #include "esp_log.h"
@@ -17,9 +19,16 @@ esp_err_t PassportWifiAudio::Init(AiPassportHardware* hardware) {
         vStreamBufferDelete(buffer_); buffer_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
+    agent_link_playback_set_buffer_level_callback(&BufferLevel, this);
     agent_link_playback_set_buffer_ms(kBufferBytes / 32);
     ready_ = true;
     return ESP_OK;
+}
+
+size_t PassportWifiAudio::BufferLevel(void* context) {
+    const auto* audio = static_cast<const PassportWifiAudio*>(context);
+    if (audio->generation_.load() != audio->cleared_.load()) return kBufferBytes;
+    return xStreamBufferBytesAvailable(audio->buffer_);
 }
 
 void PassportWifiAudio::Play(const uint8_t* pcm, size_t bytes) {
@@ -44,6 +53,7 @@ void PassportWifiAudio::PlayLoop() {
             std::lock_guard<std::mutex> lock(writer_);
             while (xStreamBufferReceive(buffer_, pcm, sizeof pcm, 0)) {}
             finished_.store(false); gate.Reset(); cleared_.store(generation);
+            passport_wifi::ClearPlaybackLevel();
         }
         const size_t available = xStreamBufferBytesAvailable(buffer_);
         if (!gate.Ready(available, finished_.load(), esp_timer_get_time() / 1000)) {
@@ -59,8 +69,12 @@ void PassportWifiAudio::PlayLoop() {
         if (generation != generation_.load() || bytes < 2) continue;
         if (!unmuted) { (void)hardware_->codec.SetMute(false); unmuted = true; }
         echo_.OnWrite(esp_timer_get_time(), bytes / 2);
-        if (hardware_->codec.WritePcm(pcm, bytes / 2) != ESP_OK)
+        if (hardware_->codec.WritePcm(pcm, bytes / 2) != ESP_OK) {
             ESP_LOGW(TAG, "speaker write failed");
+            passport_wifi::ClearPlaybackLevel();
+        } else {
+            passport_wifi::SetPlaybackLevel(passport_wifi::avatar::PcmLevel(pcm, bytes / 2));
+        }
     }
 }
 
@@ -84,6 +98,8 @@ void PassportWifiAudio::MicLoop() {
             enabled_.store(false); vTaskDelay(pdMS_TO_TICKS(100)); continue;
         }
         if (!hardware_->codec.MicOn() && hardware_->codec.StartMic() != ESP_OK) {
+            microphone_failed_.store(true);
+            ESP_LOGW(TAG, "microphone codec could not start");
             enabled_.store(false); continue;
         }
         size_t got = 0;

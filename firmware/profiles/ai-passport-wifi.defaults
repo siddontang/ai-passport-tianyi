@@ -1,4 +1,6 @@
 CONFIG_AGENT_LINK_PROFILE_AI_PASSPORT_WIFI=y
+CONFIG_APP_PROJECT_VER_FROM_CONFIG=y
+CONFIG_APP_PROJECT_VER="2.2.1-tianyi.pixel.16"
 
 # AI Passport hardware: 8 MB flash, no PSRAM; USB console avoids backlight GPIO21.
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
@@ -11,12 +13,19 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
 CONFIG_RTC_CLK_SRC_INT_RC=y
 
-# Keep the C3's internal RAM available for verified HTTPS, MQTT and realtime WSS.
-CONFIG_AGENT_LINK_REALTIME_OPUS=n
+# Reserve the C3's internal RAM for verified HTTPS and Opus realtime WSS.
+CONFIG_AGENT_LINK_MQTT_ENABLE=n
+CONFIG_AGENT_LINK_REALTIME_OPUS=y
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
-CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+# Fragment outbound application data into 1 KB TLS records. Keep the standard
+# 16 KB inbound limit: it is selected by the peer, not by our audio packet size.
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=1024
+# Prefer heap headroom over bulk WiFi throughput. C3 shares the instruction/data
+# SRAM budget; RX acceleration also competes with the full-size TLS record.
+CONFIG_ESP_WIFI_IRAM_OPT=n
+CONFIG_ESP_WIFI_RX_IRAM_OPT=n
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
 CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=8
