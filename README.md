@@ -2,8 +2,8 @@
 
 Custom firmware for the **FoloToy AI Passport (ESP32-C3, 8 MB flash, no PSRAM)**,
 with a Tianyi-inspired pixel companion, continuous voice conversations and Chinese
-subtitles. The current source version is **2.2.1-tianyi.pixel.19**; its onboarding,
-settings and inherited reconnect changes still need physical-device testing.
+subtitles. The current source version is **2.2.1-tianyi.pixel.20**; its battery,
+onboarding, settings and inherited reconnect changes still need physical-device testing.
 
 [Chinese README](README.zh-CN.md) · [Board and controls](firmware/boards/ai-passport/README.md) ·
 [Realtime implementation](firmware/components/agent_link/REALTIME.md)
@@ -24,6 +24,9 @@ settings and inherited reconnect changes still need physical-device testing.
   using the existing subtitle font for Chinese and UTF-8 conversation titles.
 - Persistent language selection and a Wi-Fi-only reset with a confirmation page;
   both settings are accessible before the device is online.
+- Battery icon and percentage on the portrait, settings and setup screens, with
+  a low-battery color at 20% or below. The CW2017 is sampled every five seconds;
+  battery-only updates transfer eight header stripes without repainting captions.
 - Bounded transport recovery that keeps the call open during retry and resumes
   capture after a fresh grant; safe pagination and server-event diagnostics.
 
@@ -31,6 +34,12 @@ Subtitle pacing is approximate: the current protocol supplies no word timestamps
 The bounded text window holds 1,024 UTF-16 units and reclaims displayed prefixes
 on cumulative updates; an unusually large single advance transcript can overflow it.
 Mouth animation follows audio amplitude, not phonemes.
+
+Battery readings retain the gauge's existing cell profile. An unavailable,
+uncalibrated or not-ready gauge displays `--%`; an invalid reading is never
+converted to a false 0% or 100%. A configured sleeping gauge is woken at startup.
+No new cell calibration or charging-state inference is applied. Sampling runs in
+the control task with bounded I2C transactions, outside audio and rendering tasks.
 
 ## Build and flash
 
@@ -79,7 +88,14 @@ alone does not select another preset. No Agent Stack server code is included her
 
 ## Validation
 
-Pixel.19 passes the AI Passport WiFi ESP-IDF build and host regressions for
+Pixel.20 passes the AI Passport WiFi ESP-IDF build, production CW2017 driver tests
+(wake/read failures, retained calibration, 0/100% and invalid readings), control
+polling tests and rendered battery cases in both languages. The real render loop
+verifies that a battery-only update transfers exactly eight stripes (15,360 bytes)
+and leaves all pixels below the header unchanged. Avatar, controls, captions,
+recovery and settings regressions pass. Physical battery acceptance is pending.
+
+Pixel.19 passed the AI Passport WiFi ESP-IDF build and host regressions for
 language persistence, actual menu confirmation/cancellation, Wi-Fi namespace
 isolation and storage failures. Production renderers cover bilingual onboarding,
 activation expiry, offline menus and Tianyi subtitles; the real portal handler
@@ -110,6 +126,7 @@ python tools/board_catalog.py --check
 python tools/check_docs.py
 python firmware/tests/test_passport_avatar.py
 python firmware/tests/test_passport_menu.py
+python firmware/tests/test_passport_battery.py
 python firmware/tests/test_passport_settings.py
 python firmware/tests/test_passport_wifi.py
 python firmware/tests/test_passport_recovery.py
@@ -139,8 +156,10 @@ Pixel.19 selectively adapts onboarding, Wi-Fi settings and localization from
 [deota-jonah/ai-passport](https://github.com/deota-jonah/ai-passport) at
 `eaee36b687dcf4d20f752d975140e99205f80b0d`, with offline-menu access, namespace-only
 reset and portal interpolation fixes. The existing voice engine, caption pacing,
-Tianyi assets, board drivers and partition layout are retained. Battery display
-and calibration are not part of this integration.
+Tianyi assets, board drivers and partition layout are retained. That integration
+excluded battery support. Pixel.20 adds a CW2017 reader using the
+[FoloToy battery driver's register map and wake sequence](https://github.com/FoloToy/ai-passport/blob/main/components/bsp/src/bsp_battery.c),
+retaining the installed cell profile instead of importing a different calibration.
 
 The full upstream source remains available for building:
 [firmware guide](firmware/README.md), [SDK](firmware/components/agent_link/README.md),

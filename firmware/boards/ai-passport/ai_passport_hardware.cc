@@ -85,6 +85,11 @@ void InitCodec(AiPassportHardware& hardware) {
 void AiPassportHardware::Init() {
     InitDisplay(*this);
     InitCodec(*this);
+    i2c_master_bus_handle_t bus = nullptr;
+    esp_err_t battery_result = i2c_master_get_bus_handle(AUDIO_I2C_PORT, &bus);
+    if (battery_result == ESP_OK) battery_result = battery.Init(bus, CW2017_ADDR);
+    if (battery_result != ESP_OK)
+        ESP_LOGW(TAG, "Battery unavailable: %s", esp_err_to_name(battery_result));
     adc_oneshot_unit_init_cfg_t ucfg = {};
     ucfg.unit_id = BUTTON_ADC_UNIT;
     if (adc_oneshot_new_unit(&ucfg, &adc_) != ESP_OK) {

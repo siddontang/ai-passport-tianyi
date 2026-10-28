@@ -1,4 +1,5 @@
 #include "passport_avatar.h"
+#include "passport_battery_ui.h"
 #include "stripe_canvas.h"
 
 #include <algorithm>
@@ -87,15 +88,15 @@ bool NeedsSubtitleStripe(int y) { return Overlaps(y, 236, 300); }
 
 void RenderStripe(uint8_t* stripe, int y, State state, const Pose& pose,
                   const char* answer, const char* footer, int volume,
-                  const SubtitleLayout* subtitle, const char* waiting_hint, Language language) {
+                  const SubtitleLayout* subtitle, const char* waiting_hint, Language language, int battery) {
     if (!stripe || y < 0 || y + kStripeRows > kScreenHeight) return;
     raster::Canvas canvas(stripe, kScreenWidth, y, kStripeRows);
     canvas.Fill(kBackground);
-    Text(canvas, raster_montserrat_14, Translate(TextId::PortraitName, language), 14, 5, 132, kMint);
+    Text(canvas, raster_montserrat_14, Translate(TextId::PortraitName, language), 14, 5, 68, kMint);
     char volume_text[12];
     std::snprintf(volume_text, sizeof volume_text, Translate(TextId::ShortVolume, language), std::max(0, std::min(100, volume)));
-    Text(canvas, raster_montserrat_14, volume_text, 169, 5, 58, 0xCEE8EC);
-    canvas.Box({157, 10, 5, 5}, 0x6CE2BD, 2);
+    Text(canvas, raster_montserrat_14, volume_text, 85, 5, 64, 0xCEE8EC);
+    DrawBattery(canvas, battery, 5);
 
     for (int row = std::max(y, kPortraitY); row < std::min(y + kStripeRows, kPortraitBottom); ++row) {
         const int sy = (row - kPortraitY) / kScale;

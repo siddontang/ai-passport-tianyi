@@ -117,6 +117,23 @@ to the saved device language. Host tests exercise the real controller, storage
 functions, portal handlers and stripe renderer. Physical setup/restart acceptance
 is still pending. Battery display/calibration and board drivers are unchanged.
 
+Pixel.20 adds the CW2017 percentage and icon to all WiFi screens. The gauge
+attaches at `0x63` on the existing ES8311 I2C bus at 100 kHz; no second bus or
+task is created. Initialization checks the profile-update flag and wakes a
+configured sleeping gauge, preserving its cell profile and alert threshold.
+There is no five-second startup wait for SOC: invalid readings remain `--%`
+and are sampled again by the control task every five seconds. Each transfer has
+a 20 ms timeout. Missing/uncalibrated gauges remain unavailable until restart.
+Values of 0 through 100 are valid; values above 100 and failed reads are unknown.
+The display uses a warning color at 20% or below. Charging is not inferred.
+
+A separate battery revision limits battery-only refreshes to eight 240x4 header
+stripes (15,360 bytes) in portrait, menu and onboarding views. Voice processing,
+subtitle timing and avatar assets are unchanged. Run
+`python firmware/tests/test_passport_battery.py` for the real gauge driver and
+polling tests, and `python firmware/tests/test_passport_menu.py` for bilingual
+rendering and incremental-transfer checks. Physical battery acceptance is pending.
+
 Both directions use Opus in 20 ms packets; output is 24 kHz/24 kbps and is decoded
 at the speaker's 16 kHz. One resident C3 worker owns network and codec processing,
 with a 25 KB reserved codec workspace shared between encoder and decoder. The
@@ -169,7 +186,8 @@ Regenerate the subtitle font with `python firmware/tools/pack_passport_font.py`
 The font license remains in `firmware/boards/common/fonts/OFL.txt`.
 
 The WiFi application contains no BLE exchange, NFC web integration or contact
-management. CW2017 battery reporting is not advertised by this version.
+management. CW2017 battery display is local; platform battery/charging reporting
+is not advertised by this version.
 
 ## Acceptance
 
@@ -177,4 +195,6 @@ Host checks cover button gestures, PCM packet assembly/conversion, playback
 gating and device-authenticated platform APIs, including the C3 PCM16 path.
 A build is not hardware acceptance. Verify hotspot setup, activation, binding,
 both audio directions, volume, call stop, network recovery, conversation paging
-and repeated calls on the physical board. Keep the matching ELF for diagnosis.
+and repeated calls on the physical board. For pixel.20, also check battery
+readings while unplugged and on USB power, plus uninterrupted speech during
+indicator updates. Keep the matching ELF for diagnosis.

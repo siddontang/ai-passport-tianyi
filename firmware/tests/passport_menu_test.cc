@@ -22,7 +22,18 @@ struct App {
 };
 struct FrameDone {};
 St7789Lcd lcd;
-void vTaskDelay(unsigned ticks) { if (ticks > 1 && lcd.stripes >= 80) throw FrameDone{}; }
+bool battery_update_test = false, battery_injected = false;
+uint8_t before_battery[240 * 320 * 2]{};
+void vTaskDelay(unsigned ticks) {
+    if (ticks <= 1 || lcd.stripes < 80) return;
+    if (battery_update_test && !battery_injected) {
+        memcpy(before_battery, lcd.pixels, sizeof before_battery);
+        battery_injected = true;
+        passport_wifi::SetBattery(10);
+        return;
+    }
+    throw FrameDone{};
+}
 void ValidateUtf8(const char* text) {
     const char* end = text + strlen(text);
     while (text < end) assert(raster::NextCodepoint(text, end) != 0xfffd);
@@ -95,6 +106,7 @@ int main(int argc, char** argv) {
     using namespace passport_wifi;
     for (auto language : {Language::Chinese, Language::English}) {
         SetLanguage(language);
+        SetBattery(75);
         const std::string prefix = language == Language::Chinese ? "zh-" : "en-";
         menu.count_ = 0;
         menu.Add(Action::Sessions, Tr(TextId::ChooseConversation));
@@ -141,6 +153,41 @@ int main(int argc, char** argv) {
         SetAnswer(""); home.recovering_ = true; home.active_ = false; home.Publish();
         assert(PortraitState(input) == avatar::State::Waiting);
         Render(argv[1], (prefix + "reconnecting").c_str());
+        home.recovering_ = false; home.active_ = true; home.volume_ = 100;
+        SetAnswer("你好，天依。字幕保持跟随语音。"); home.Publish();
+        for (int percent : {-1, 0, 20, 100}) {
+            SetBattery(percent);
+            Render(argv[1], (prefix + "battery-" + std::to_string(percent)).c_str());
+            assert(input.battery == percent);
+            const uint8_t* background = lcd.pixels;
+            unsigned text_pixels = 0;
+            for (int y = 5; y < 25; ++y) for (int x = 186; x < 232; ++x) {
+                const auto* pixel = lcd.pixels + (y * 240 + x) * 2;
+                text_pixels += pixel[0] != background[0] || pixel[1] != background[1];
+            }
+            assert(text_pixels > 30); // The number/unknown marker must be rendered, not just the icon.
+        }
+        // The actual UI loop must redraw only eight header stripes when the
+        // percentage changes, including during a call and on an offline page.
+        for (int view = 0; view < 3; ++view) {
+            if (view == 0) home.Publish();
+            if (view == 1) menu.Publish();
+            if (view == 2) { status.phase = AGENT_LINK_PHASE_SETUP; SetStatus(status); home.Publish(); }
+            SetBattery(75);
+            const auto content_revision = input.revision, caption_revision = input.subtitle_revision;
+            battery_update_test = true; battery_injected = false;
+            Render(argv[1], (prefix + "battery-update-" + std::to_string(view)).c_str());
+            battery_update_test = false;
+            assert(lcd.stripes == 88);
+            for (unsigned stripe = 80; stripe < 88; ++stripe) assert(lcd.flushed_y[stripe] == int(stripe - 80) * 4);
+            assert(memcmp(before_battery, lcd.pixels, 32 * 480) != 0);
+            assert(memcmp(before_battery + 32 * 480, lcd.pixels + 32 * 480, sizeof before_battery - 32 * 480) == 0);
+            assert(input.revision == content_revision && input.subtitle_revision == caption_revision);
+        }
+        const auto battery_revision = input.battery_revision;
+        SetBattery(10); assert(input.battery_revision == battery_revision);
+        SetBattery(101); assert(input.battery == -1 && input.battery_revision == battery_revision + 1);
+        SetBattery(-99); assert(input.battery == -1 && input.battery_revision == battery_revision + 1);
     }
-    puts("Passport bilingual onboarding, expiry, offline menus, UTF-8 and portrait/subtitle checks passed");
+    puts("Passport bilingual onboarding, expiry, offline menus, UTF-8, portrait/subtitles and header-only battery refresh passed");
 }

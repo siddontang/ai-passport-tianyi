@@ -1,6 +1,7 @@
 #pragma once
 
 #include "es8311_audio.h"
+#include "ai_passport_battery.h"
 #include "st7789_lcd.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_oneshot.h"
@@ -13,6 +14,7 @@ public:
     PassportKey ReadKey();
     St7789Lcd lcd;
     Es8311Codec codec;
+    AiPassportBattery battery;
     bool display_ready = false, audio_ready = false, keys_ready = false;
 private:
     adc_oneshot_unit_handle_t adc_ = nullptr;

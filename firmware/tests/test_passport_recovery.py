@@ -10,7 +10,7 @@ cloud = root / 'components/agent_link/src/transports/wifi/cloud'
 fixture = (root / 'tests/passport_recovery_test.cc').read_text()
 sections = {
     'END_CALL': (app / 'ai_passport_wifi.cc', '    void EndCall() {', '\n    void Message('),
-    'UPDATE_CALL': (app / 'ai_passport_wifi.cc', '    void UpdateCall(', '\n    void ControlLoop()'),
+    'UPDATE_CALL': (app / 'ai_passport_wifi.cc', '    void UpdateCall(', '\n    void UpdateBattery('),
     'MIC_LOOP': (app / 'passport_wifi_audio.cc', 'void PassportWifiAudio::MicLoop()', None),
     'WORKER': (cloud / 'cloud_realtime.cc', 'void Worker(void*) {', '\n}  // namespace'),
     'RECOVERING': (cloud / 'cloud_realtime.cc', 'bool cloud_realtime_recovering(void)', '\n\nvoid cloud_realtime_cancel'),

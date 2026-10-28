@@ -133,7 +133,8 @@
     ],
     "ui": "raster",
     "hardware_sources": [
-      "ai_passport_hardware.cc"
+      "ai_passport_hardware.cc",
+      "ai_passport_battery.cc"
     ]
   },
   "m5stack-stopwatch-ble": {

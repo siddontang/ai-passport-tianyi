@@ -99,7 +99,7 @@ inline Pose Animate(State state, uint32_t now_ms, uint8_t level) {
 void RenderStripe(uint8_t* stripe, int y, State state, const Pose& pose,
                   const char* answer, const char* footer, int volume = 70,
                   const SubtitleLayout* subtitle = nullptr, const char* waiting_hint = nullptr,
-                  Language language = Language::English);
+                  Language language = Language::English, int battery = -1);
 bool NeedsStripe(int y, bool full, const Pose& previous, const Pose& next);
 bool NeedsContentStripe(int y);
 bool NeedsSubtitleStripe(int y);

@@ -1,6 +1,7 @@
 #include "passport_wifi_ui.h"
 #include "passport_avatar.h"
 #include "passport_onboarding.h"
+#include "passport_battery_ui.h"
 #include "stripe_canvas.h"
 #include <cstdio>
 #include <cstring>
@@ -28,6 +29,8 @@ struct Frame {
     int volume = 70;
     uint32_t revision = 1;
     uint32_t subtitle_revision = 1;
+    int battery = -1;
+    uint32_t battery_revision = 1;
 };
 Frame input, frame;
 std::mutex lock;
@@ -62,6 +65,7 @@ void Render(void*) {
     const TickType_t frame_delay = pdMS_TO_TICKS(avatar::kFrameIntervalMs) + 1;
     uint32_t seen = 0;
     uint32_t subtitle_seen = 0;
+    uint32_t battery_seen = 0;
     avatar::SubtitleLayout subtitle;
     avatar::Pose previous{};
     bool was_portrait = false;
@@ -72,7 +76,8 @@ void Render(void*) {
     for (;;) {
         {
             std::lock_guard<std::mutex> guard(lock);
-            if (seen != input.revision || subtitle_seen != input.subtitle_revision) frame = input;
+            if (seen != input.revision || subtitle_seen != input.subtitle_revision ||
+                battery_seen != input.battery_revision) frame = input;
         }
         const bool link = frame.view != View::Menu && frame.status.phase != AGENT_LINK_PHASE_CONNECTED &&
                           frame.status.phase != AGENT_LINK_PHASE_READY;
@@ -96,6 +101,7 @@ void Render(void*) {
         const auto pose = avatar::Animate(state, now_ms, envelope.Read(now_ms));
         const bool content_changed = seen != frame.revision || was_portrait != portrait || waiting_changed || expiry_seen != expires;
         const bool subtitle_changed = subtitle_seen != frame.subtitle_revision;
+        const bool battery_changed = battery_seen != frame.battery_revision;
         if (subtitle_changed) subtitle.Wrap(frame.answer);
         const bool full = !portrait || !was_portrait;
         if (now_ms - stats_at >= 10000) {
@@ -104,27 +110,30 @@ void Render(void*) {
                      static_cast<unsigned>(drawn_stripes * 1920));
             stats_at = now_ms; drawn_stripes = 0;
         }
-        if (!content_changed && !subtitle_changed && (!portrait || pose == previous)) {
+        if (!content_changed && !subtitle_changed && !battery_changed && (!portrait || pose == previous)) {
             vTaskDelay(frame_delay); continue;
         }
         const char* title = frame.title;
         const char* detail = frame.detail;
         const uint32_t accent = link ? 0xFFB54A : 0x54D6B4;
         for (int y = 0; y < 320; y += 4) {
+            if (!portrait && !content_changed && !subtitle_changed && !BatteryStripe(y)) continue;
             if (portrait && !avatar::NeedsStripe(y, full, previous, pose) &&
                 !(content_changed && avatar::NeedsContentStripe(y)) &&
-                !(subtitle_changed && avatar::NeedsSubtitleStripe(y))) continue;
+                !(subtitle_changed && avatar::NeedsSubtitleStripe(y)) &&
+                !(battery_changed && BatteryStripe(y))) continue;
             if (portrait) {
                 avatar::RenderStripe(panel->StripeBuffer(), y, state, pose, frame.answer, frame.footer,
-                                     frame.volume, &subtitle, waiting_hint, frame.language);
+                                     frame.volume, &subtitle, waiting_hint, frame.language, frame.battery);
             } else if (link) {
                 raster::Canvas canvas(panel->StripeBuffer(), 240, y, 4);
-                DrawOnboarding(canvas, frame.status, frame.language, hotspot, expires);
+                DrawOnboarding(canvas, frame.status, frame.language, hotspot, expires, frame.battery);
             } else {
             raster::Canvas canvas(panel->StripeBuffer(), 240, y, 4);
             canvas.Fill(0x101820);
             canvas.Box({12, 40, 216, 236}, 0x1D2B36, 12);
-            Text(canvas, raster_montserrat_14, "AI PASSPORT / WIFI", 16, 12, 212, 1, accent);
+            Text(canvas, raster_montserrat_14, "AI PASSPORT", 16, 12, 132, 1, accent);
+            DrawBattery(canvas, frame.battery, 12);
             canvas.Clip({24, 52, 192, 212});
             Text(canvas, raster_montserrat_20,
                  title, 24, 54, 192, 2, 0xF4F4EC);
@@ -147,6 +156,7 @@ void Render(void*) {
         }
         seen = frame.revision;
         subtitle_seen = frame.subtitle_revision;
+        battery_seen = frame.battery_revision;
         previous = pose;
         previous_state = state; waiting_second = second;
         expiry_seen = expires;
@@ -186,6 +196,13 @@ void SetContent(const char* title, const char* detail, const char* footer, View 
     input.voice = voice; input.language = GetLanguage();
     if (volume >= 0) input.volume = volume > 100 ? 100 : volume;
     ++input.revision;
+}
+void SetBattery(int percent) {
+    if (percent < 0 || percent > 100) percent = -1;
+    std::lock_guard<std::mutex> guard(lock);
+    if (input.battery == percent) return;
+    input.battery = percent;
+    ++input.battery_revision;
 }
 void SetAnswer(const char* text) {
     if (!text) return;

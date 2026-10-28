@@ -335,6 +335,11 @@ private:
             EndCall(); Message(TextId::CallEnded);
         }
     }
+    void UpdateBattery(int64_t now) {
+        if (battery_at_ >= 0 && now - battery_at_ < 5000000) return;
+        battery_at_ = now;
+        passport_wifi::SetBattery(hardware_.battery.ReadPercent());
+    }
     void ControlLoop() {
         int64_t sync_at = 0;
         int saved_volume = volume_.load();
@@ -348,6 +353,7 @@ private:
                 if (saved_volume != volume_.load()) { Save(); saved_volume = volume_.load(); }
             }
             UpdateCall(now);
+            UpdateBattery(now);
             Publish();
         }
     }
@@ -389,6 +395,7 @@ private:
     char session_[80]{}, session_name_[96]{}, agent_name_[80]{}, message_[144]{};
     bool voice_supported_ = false, calling_ = false, active_ = false, recovering_ = false;
     int64_t requested_at_ = 0;
+    int64_t battery_at_ = -1;
 };
 
 DECLARE_APPLICATION(AiPassportWifi);

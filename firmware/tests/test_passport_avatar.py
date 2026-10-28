@@ -20,6 +20,6 @@ objects.append(str(target))
 binary = BUILD / "passport_avatar_test"
 subprocess.run(["c++", "-std=c++17", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined", "-g",
                 "-I", str(APP), "-I", str(COMMON), str(ROOT / "tests/passport_avatar_test.cc"),
-                str(APP / "passport_avatar.cc"), str(APP / "passport_language.cc"), str(APP / "passport_avatar_data.cc"),
+                str(APP / "passport_avatar.cc"), str(APP / "passport_battery_ui.cc"), str(APP / "passport_language.cc"), str(APP / "passport_avatar_data.cc"),
                 str(COMMON / "stripe_canvas.cc"), *objects, "-o", str(binary)], check=True)
 subprocess.run([str(binary), str(BUILD), *sys.argv[1:]], check=True)

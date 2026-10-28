@@ -1,5 +1,6 @@
 // Onboarding adapted from deota-jonah/ai-passport eaee36b (MIT).
 #include "passport_onboarding.h"
+#include "passport_battery_ui.h"
 #include <cstdio>
 #include <cstring>
 
@@ -24,13 +25,14 @@ uint32_t CodeRemaining(const agent_link_status_t& status, int64_t received_us, i
     return elapsed >= status.expires_s ? 0 : status.expires_s - elapsed;
 }
 void DrawOnboarding(raster::Canvas& canvas, const agent_link_status_t& status,
-                    Language language, const char* hotspot, uint32_t remaining) {
+                    Language language, const char* hotspot, uint32_t remaining, int battery) {
     auto tr = [language](TextId id) { return Translate(id, language); };
     const auto& font = language == Language::Chinese ? passport_font_16 : raster_montserrat_14;
     constexpr uint32_t accent = 0x8AE1D8;
     canvas.Fill(0x101820);
     canvas.Box({12, 40, 216, 234}, 0x1D2B36, 12);
     Text(canvas, font, tr(TextId::Header), 16, 12, 1, accent);
+    DrawBattery(canvas, battery, 12);
     canvas.Clip({24, 52, 192, 220});
     if (status.phase == AGENT_LINK_PHASE_SETUP) {
         TextId title = TextId::SetupTitle;
