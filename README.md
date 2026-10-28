@@ -2,7 +2,7 @@
 
 Custom firmware for the **FoloToy AI Passport (ESP32-C3, 8 MB flash, no PSRAM)**,
 with a Tianyi-inspired pixel companion, continuous voice conversations and Chinese
-subtitles. The current source version is **2.2.1-tianyi.pixel.20**; its battery,
+subtitles. The current source version is **2.2.1-tianyi.pixel.21**; its battery,
 onboarding, settings and inherited reconnect changes still need physical-device testing.
 
 [Chinese README](README.zh-CN.md) · [Board and controls](firmware/boards/ai-passport/README.md) ·
@@ -14,6 +14,7 @@ onboarding, settings and inherited reconnect changes still need physical-device 
 
 - Four 64x64 pixel expressions, blinking, listening feedback and mouth movement
   driven by speaker audio. Rendering reuses a 240x4 DMA stripe without a framebuffer.
+  Pixel.21 uses the approved twin crown-loop hairstyle, curved side locks and bows.
 - The upstream C3 Opus audio path, shared codec workspace and incremental TLS I/O.
 - A periodic WebSocket Pong that keeps long spoken replies alive with the gateway's
   Pong-based heartbeat, including when incoming control frames wait behind audio.
@@ -87,6 +88,11 @@ and the current console exposes no per-Agent voice selector. A speaking-style pr
 alone does not select another preset. No Agent Stack server code is included here.
 
 ## Validation
+
+Pixel.21 changes the portrait atlas only, retaining the 32 KB flash asset size
+and existing face-patch rendering. Production-renderer checks cover all four
+expressions, incremental transfers, subtitles and battery updates in both languages.
+Voice, recovery, battery sampling and settings behavior are inherited unchanged.
 
 Pixel.20 passes the AI Passport WiFi ESP-IDF build, production CW2017 driver tests
 (wake/read failures, retained calibration, 0/100% and invalid readings), control

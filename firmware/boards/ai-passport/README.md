@@ -175,8 +175,10 @@ Menus, actionable errors and provisioning keep their text view. Build version
 The prior full-color source atlas
 remains in `apps/ai-passport-wifi/avatar/` alongside the pixel atlas and its prompt.
 
-The pixel source atlas is `apps/ai-passport-wifi/avatar/tianyi-pixel-expressions.png`. Regenerate
-the immutable pixel asset with `python firmware/tools/pack_passport_avatar.py` from
+The pixel source atlas is `apps/ai-passport-wifi/avatar/tianyi-pixel-expressions.png`.
+Pixel.21 replaces the hairstyle with the approved twin crown loops, curved side
+locks and bows, retaining the existing 64x64 sprites and face-patch rectangles.
+Regenerate the immutable pixel asset with `python firmware/tools/pack_passport_avatar.py` from
 the repository root (Pillow required). Run `python firmware/tests/test_passport_avatar.py`
 for host checks of silence expiry, audio levels, animation states, incremental
 regions, text layout and bounds of the actual renderer. Add `--preview` to export
