@@ -1,9 +1,9 @@
 <!doctype html>
-<html>
+<html lang="{{LOCALE}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AgentLink WiFi</title>
+<title>{{TITLE}}</title>
 <style>
 :root{--bg:#0b0f17;--card:#151b26;--fg:#e8edf4;--mut:#8a94a6;--acc:#4f8cff;--line:#232c3b}
 *{box-sizing:border-box}
@@ -31,15 +31,15 @@ button:active{opacity:.85}
 </style>
 </head>
 <body>
-<input type="checkbox" id="lang">
+<input type="checkbox" id="lang" {{LANG_CHECKED}}>
 <div class="card">
 <div class="langbar"><label for="lang" class="langbtn"><span class="zh">English</span><span class="en">中文</span></label></div>
-<h1><span class="zh">WiFi 配网</span><span class="en">WiFi Setup</span></h1>
-<p class="sub"><span class="zh">为设备选择要接入的 WiFi</span><span class="en">Connect this device to your WiFi</span></p>
+<h1><span class="zh">无线网络配网</span><span class="en">WiFi Setup</span></h1>
+<p class="sub"><span class="zh">为设备选择要接入的无线网络</span><span class="en">Connect this device to your WiFi</span></p>
 <form method="POST" action="/provision" autocomplete="off">
-<label class="field"><span class="zh">WiFi 名称</span><span class="en">Network name (SSID)</span></label>
+<label class="field"><span class="zh">网络名称</span><span class="en">Network name (SSID)</span></label>
 <select id="sel" onchange="var e=document.getElementById('ssid');if(e)e.value=this.value">
-<option value="">— SSID —</option>
+<option value="">{{CHOOSE_NETWORK}}</option>
 {{SSIDS}}
 </select>
 <input type="text" name="ssid" id="ssid" maxlength="32" required>
@@ -47,11 +47,11 @@ button:active{opacity:.85}
 <label class="field"><span class="zh">密码</span><span class="en">Password</span></label>
 <input type="password" name="password" id="pw" maxlength="64">
 <label class="chk"><input type="checkbox" onchange="pw.type=this.checked?'text':'password'"><span class="zh">显示密码</span><span class="en">Show password</span></label>
-<p class="tip"><span class="zh">开放网络可留空密码；仅支持 2.4GHz WiFi。</span><span class="en">Leave blank for open networks; 2.4GHz WiFi only.</span></p>
+<p class="tip"><span class="zh">开放网络可留空密码；仅支持 2.4 吉赫兹网络。</span><span class="en">Leave blank for open networks; 2.4GHz WiFi only.</span></p>
 <button type="submit"><span class="zh">连接</span><span class="en">Connect</span></button>
 </form>
 <p class="tip"><span class="zh">列表里没有？稍等几秒后刷新页面。</span><span class="en">Not listed? Wait a few seconds, then reload.</span></p>
-<p class="foot">Deotaland Agent Platform</p>
+<p class="foot"><span class="zh">设备网络设置</span><span class="en">Device network setup</span></p>
 </div>
 </body>
 </html>

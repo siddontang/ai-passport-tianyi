@@ -18,5 +18,13 @@ CSS switch `.zh`/`.en` visibility without navigation. This works in captive-port
 browsers that restrict JavaScript. Join progress uses JavaScript; the device
 continues connecting if the page cannot poll.
 
+The optional C hook `al_wifi_prov_use_english()` selects the initial language for
+each response. Its weak default returns false (Chinese); AI Passport overrides it
+with the saved device language. The page toggle changes only the current page.
+Keep `{{LOCALE}}`, `{{LANG_CHECKED}}`, `{{TITLE}}` and `{{CHOOSE_NETWORK}}` intact;
+the handler fills locale placeholders before inserting scanned SSIDs, so network
+names containing template syntax remain literal. Form fields and status polling
+are identical in both languages.
+
 Keep all assets inline. A phone connected to the setup hotspot may have no
 internet access, so external fonts, scripts and images are unavailable.

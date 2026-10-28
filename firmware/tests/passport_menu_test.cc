@@ -2,8 +2,12 @@
 #include <cassert>
 #include <string>
 // INSERT_UI
-enum class Page { Home, Menu, Sessions };
-enum class Action { Sessions, New, Back, Select, Previous, Next };
+using passport_wifi::TextId;
+using passport_wifi::Tr;
+using passport_wifi::Language;
+using passport_wifi::VoiceState;
+enum class Page { Home, Menu, Sessions, ConfirmWifi, Language };
+enum class Action { Sessions, New, Back, Select, Previous, Next, Wifi, Language };
 struct Item { Action action; unsigned row; char name[64]; };
 struct App {
     Page page_ = Page::Menu;
@@ -53,7 +57,7 @@ int main(int argc, char** argv) {
     App menu;
     menu.Add(Action::Sessions, "选择会话"); menu.Add(Action::New, "新建对话"); menu.Add(Action::Back, "返回");
     menu.Publish();
-    assert(strcmp(passport_wifi::input.title, "语音菜单") == 0);
+    assert(strcmp(passport_wifi::input.title, "会话与设置") == 0);
     assert(strstr(passport_wifi::input.detail, "选择会话") && strstr(passport_wifi::input.detail, "返回"));
     Render(argv[1], "menu");
     App sessions; sessions.page_ = Page::Sessions;
@@ -69,9 +73,18 @@ int main(int argc, char** argv) {
     for (unsigned i = 0; i < layout.Count(); ++i)
         assert(raster::TextWidth(passport_font_16, detail + layout.Start(i), detail + layout.End(i)) <= 192);
     Render(argv[1], "sessions");
-    const char* labels = "语音菜单会话列表选择会话新建对话返回上一页下一页上/下：选择 OK：确认正在加载创建准备语音请稍候暂无会话未命名音量";
-    const char* end = labels + strlen(labels);
-    while (labels < end) assert(raster::GlyphId(passport_font_16, raster::NextCodepoint(labels, end)));
+    for (unsigned id = 0; id < unsigned(TextId::Count); ++id) {
+        for (auto language : {Language::Chinese, Language::English}) {
+            const char* labels = passport_wifi::Translate(static_cast<TextId>(id), language);
+            assert(*labels); ValidateUtf8(labels);
+            const char* end = labels + strlen(labels);
+            while (labels < end) {
+                const auto cp = raster::NextCodepoint(labels, end);
+                assert(cp == '\n' || raster::GlyphId(passport_font_16, cp));
+                if (language == Language::English) assert(cp < 128);
+            }
+        }
+    }
     App home; home.page_ = Page::Home; home.calling_ = home.recovering_ = true; home.Publish();
     assert(passport_wifi::input.view == passport_wifi::View::Portrait);
     assert(passport_wifi::PortraitState(passport_wifi::input) == passport_wifi::avatar::State::Waiting);
@@ -79,5 +92,55 @@ int main(int argc, char** argv) {
     home.recovering_ = false; home.active_ = true; home.Publish();
     assert(strcmp(passport_wifi::input.answer, "你好，天依。") == 0);
     assert(passport_wifi::PortraitState(passport_wifi::input) == passport_wifi::avatar::State::Listening);
-    puts("Passport Chinese menu, UTF-8, portrait and subtitle preservation checks passed");
+    using namespace passport_wifi;
+    for (auto language : {Language::Chinese, Language::English}) {
+        SetLanguage(language);
+        const std::string prefix = language == Language::Chinese ? "zh-" : "en-";
+        menu.count_ = 0;
+        menu.Add(Action::Sessions, Tr(TextId::ChooseConversation));
+        menu.Add(Action::New, Tr(TextId::NewConversation));
+        menu.Add(Action::Wifi, Tr(TextId::ChangeWifi));
+        menu.Add(Action::Language, Tr(TextId::LanguageTitle));
+        menu.Add(Action::Back, Tr(TextId::Back));
+        agent_link_status_t status{};
+        status.phase = AGENT_LINK_PHASE_SETUP;
+        SetStatus(status); home.active_ = home.calling_ = false; home.Publish();
+        Render(argv[1], (prefix + "setup").c_str());
+        strcpy(status.hint, "Authentication failed"); SetStatus(status);
+        Render(argv[1], (prefix + "bad-password").c_str());
+        menu.Publish(); Render(argv[1], (prefix + "offline-menu").c_str());
+        assert(input.view == View::Menu); // Menus must remain reachable without a link.
+        menu.cursor_ = 3; menu.Publish();
+        assert(strstr(input.detail, Tr(TextId::LanguageTitle)) && strstr(input.detail, Tr(TextId::Back)));
+        Render(argv[1], (prefix + "offline-menu-scrolled").c_str());
+        menu.cursor_ = 0;
+        App language_menu; language_menu.page_ = Page::Language;
+        language_menu.Add(Action::Select, Tr(TextId::ChineseOption));
+        language_menu.Add(Action::Select, Tr(TextId::EnglishOption));
+        language_menu.Add(Action::Back, Tr(TextId::Back));
+        language_menu.Publish(); Render(argv[1], (prefix + "language").c_str());
+        App reset; reset.page_ = Page::ConfirmWifi;
+        reset.Add(Action::Back, Tr(TextId::Cancel)); reset.Add(Action::Select, Tr(TextId::ClearWifi));
+        reset.Publish(); Render(argv[1], (prefix + "confirm-wifi").c_str());
+        home.Publish(); status.phase = AGENT_LINK_PHASE_PAIRING;
+        strcpy(status.code, "123456"); status.expires_s = 60; SetStatus(status);
+        assert(CodeRemaining(status, now_us, now_us + 59000000) == 1);
+        Render(argv[1], (prefix + "activation").c_str());
+        const auto revision = input.revision;
+        status.expires_s = 59; SetStatus(status); assert(input.revision > revision);
+        now_us += 60000000;
+        assert(CodeRemaining(input.status, input.status_at, now_us) == 0);
+        Render(argv[1], (prefix + "expired").c_str());
+        status.phase = AGENT_LINK_PHASE_BLOCKED; strcpy(status.title, "No agent"); SetStatus(status);
+        Render(argv[1], (prefix + "unbound").c_str());
+        status.phase = AGENT_LINK_PHASE_READY; SetStatus(status);
+        SetAnswer("你好，天依。");
+        home.calling_ = home.active_ = true; home.Publish();
+        assert(PortraitState(input) == avatar::State::Listening);
+        Render(argv[1], (prefix + "tianyi-subtitles").c_str());
+        SetAnswer(""); home.recovering_ = true; home.active_ = false; home.Publish();
+        assert(PortraitState(input) == avatar::State::Waiting);
+        Render(argv[1], (prefix + "reconnecting").c_str());
+    }
+    puts("Passport bilingual onboarding, expiry, offline menus, UTF-8 and portrait/subtitle checks passed");
 }

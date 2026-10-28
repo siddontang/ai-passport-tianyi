@@ -39,6 +39,9 @@
 extern const char portal_html_start[]     asm("_binary_portal_html_start");
 extern const char connecting_html_start[] asm("_binary_connecting_html_start");
 
+// Applications may override this bounded, thread-safe getter. Default: Chinese.
+extern "C" __attribute__((weak)) bool al_wifi_prov_use_english(void) { return false; }
+
 namespace {
 constexpr const char* TAG = "agent_link.prov";
 
@@ -213,11 +216,20 @@ esp_err_t SendRedirectToPortal(httpd_req_t* req) {
 }
 
 // ── HTTP handlers ────────────────────────────────────────────────────────────────────────
+void ApplyLocale(std::string& page) {
+    const bool english = al_wifi_prov_use_english();
+    ReplaceAll(page, "{{LOCALE}}", english ? "en" : "zh-CN");
+    ReplaceAll(page, "{{LANG_CHECKED}}", english ? "checked" : "");
+    ReplaceAll(page, "{{TITLE}}", english ? "Device network setup" : "设备网络设置");
+    ReplaceAll(page, "{{CHOOSE_NETWORK}}", english ? "Choose a network" : "选择网络");
+}
 esp_err_t RootGet(httpd_req_t* req) {
     // Serve portal.html with the cached scan injected at {{SSIDS}}; no live scan on the request path.
     std::string opts;
     { std::lock_guard<std::mutex> lk(s_scan_mtx); opts = s_scan_options; }
     std::string page(portal_html_start);   // EMBED_TXTFILES blob is NUL-terminated
+    ApplyLocale(page);
+    // Network names are data: do not interpret template-looking SSIDs as locale tokens.
     ReplaceAll(page, "{{SSIDS}}", opts.c_str());
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, page.c_str(), page.size());
@@ -247,7 +259,9 @@ esp_err_t ProvisionPost(httpd_req_t* req) {
         const int r = httpd_req_recv(req, body + received, total - received);
         if (r <= 0) {
             if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv failed");
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_set_type(req, "text/plain; charset=utf-8");
+            httpd_resp_send(req, al_wifi_prov_use_english() ? "Request reception failed" : "请求接收失败", HTTPD_RESP_USE_STRLEN);
             return ESP_FAIL;
         }
         received += r;
@@ -271,7 +285,9 @@ esp_err_t ProvisionPost(httpd_req_t* req) {
     if (s_on_creds) s_on_creds(ssid, pass);           // transport kicks off the station connect
 
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, connecting_html_start, HTTPD_RESP_USE_STRLEN);
+    std::string page(connecting_html_start);
+    ApplyLocale(page);
+    return httpd_resp_send(req, page.c_str(), page.size());
 }
 
 esp_err_t StatusGet(httpd_req_t* req) {

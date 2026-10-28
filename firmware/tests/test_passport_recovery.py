@@ -9,7 +9,7 @@ app = root / 'apps/ai-passport-wifi'
 cloud = root / 'components/agent_link/src/transports/wifi/cloud'
 fixture = (root / 'tests/passport_recovery_test.cc').read_text()
 sections = {
-    'END_CALL': (app / 'ai_passport_wifi.cc', '    void EndCall() {', '\n    void Error('),
+    'END_CALL': (app / 'ai_passport_wifi.cc', '    void EndCall() {', '\n    void Message('),
     'UPDATE_CALL': (app / 'ai_passport_wifi.cc', '    void UpdateCall(', '\n    void ControlLoop()'),
     'MIC_LOOP': (app / 'passport_wifi_audio.cc', 'void PassportWifiAudio::MicLoop()', None),
     'WORKER': (cloud / 'cloud_realtime.cc', 'void Worker(void*) {', '\n}  // namespace'),
@@ -26,5 +26,5 @@ source = build / 'passport_recovery_test.cc'
 source.write_text(fixture)
 binary = build / 'passport_recovery_test'
 subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-g',
-                '-fsanitize=address,undefined', '-I' + str(cloud), str(source), '-o', str(binary)], check=True)
+                '-fsanitize=address,undefined', '-I' + str(cloud), '-I' + str(app), str(source), str(app / 'passport_language.cc'), '-o', str(binary)], check=True)
 subprocess.run([str(binary)], check=True, timeout=30)

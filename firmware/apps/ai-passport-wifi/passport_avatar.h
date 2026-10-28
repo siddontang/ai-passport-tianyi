@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include "passport_language.h"
 
 namespace passport_wifi::avatar {
 
@@ -97,10 +98,11 @@ inline Pose Animate(State state, uint32_t now_ms, uint8_t level) {
 // The caller owns exactly one four-row DMA stripe. No framebuffer is needed.
 void RenderStripe(uint8_t* stripe, int y, State state, const Pose& pose,
                   const char* answer, const char* footer, int volume = 70,
-                  const SubtitleLayout* subtitle = nullptr, const char* waiting_hint = nullptr);
+                  const SubtitleLayout* subtitle = nullptr, const char* waiting_hint = nullptr,
+                  Language language = Language::English);
 bool NeedsStripe(int y, bool full, const Pose& previous, const Pose& next);
 bool NeedsContentStripe(int y);
 bool NeedsSubtitleStripe(int y);
-const char* Caption(State state);
+const char* Caption(State state, Language language = Language::English);
 
 }  // namespace passport_wifi::avatar

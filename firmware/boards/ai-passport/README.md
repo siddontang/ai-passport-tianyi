@@ -107,6 +107,16 @@ logs contain only row counts, offsets and the more-pages flag. Production-code
 host tests cover retry/cancel/resume behavior and menu rendering; this build has
 not yet been flashed or accepted on a physical AI Passport.
 
+Pixel.19 adds bilingual setup/activation guidance, activation-code expiry,
+persistent Chinese/English settings and a confirmed Wi-Fi reset. Long-press OK
+opens settings even during setup or activation. The third entry changes Wi-Fi;
+the fourth changes language. Reset stops the link and clears only the `al_wifi`
+namespace before restarting; identity, binding, conversation and language are
+retained. Storage errors do not trigger a reboot. New provisioning pages default
+to the saved device language. Host tests exercise the real controller, storage
+functions, portal handlers and stripe renderer. Physical setup/restart acceptance
+is still pending. Battery display/calibration and board drivers are unchanged.
+
 Both directions use Opus in 20 ms packets; output is 24 kHz/24 kbps and is decoded
 at the speaker's 16 kHz. One resident C3 worker owns network and codec processing,
 with a 25 KB reserved codec workspace shared between encoder and decoder. The
@@ -127,8 +137,9 @@ cumulative updates reclaim already shown prefixes. An unusually large single
 advance transcript can exceed that window; the diagnostic reports overflow
 and retains its beginning instead of jumping to its end. Glyphs use the bundled OFL Noto Sans SC font,
 including all 6,763 GB2312 Hanzi, stored in mapped flash. Layout is calculated once
-per text update and subtitle updates share the 8 fps display cap. Menus keep the
-small Latin fonts. Experimental pixel.13 flow control, caption timing and audio
+per text update and subtitle updates share the 8 fps display cap. Menu items use
+the same Chinese-capable font; Latin-only headings retain the small Latin fonts.
+Experimental pixel.13 flow control, caption timing and audio
 allocation changes were archived before importing the official audio path.
 
 The WiFi home screen uses a Tianyi-inspired pixel portrait with blinking,

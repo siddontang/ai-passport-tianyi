@@ -23,9 +23,13 @@ Face Mouth(Face face) {
     return face == Face::TalkSmall || face == Face::TalkOpen ? face : Face::Smile;
 }
 
-void Text(raster::Canvas& canvas, const raster_font_t& font, const char* text,
+void Text(raster::Canvas& canvas, const raster_font_t& preferred_font, const char* text,
           int x, int y, int width, uint32_t color) {
     if (!text || !*text) return;
+    bool latin = true;
+    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(text); *p; ++p)
+        if (*p >= 0x80) latin = false;
+    const auto& font = latin ? preferred_font : passport_font_16;
     raster::TextLayout layout;
     layout.Wrap(font, text, width);
     if (layout.Count())
@@ -52,12 +56,12 @@ void SubtitleLayout::Wrap(const char* text) {
     }
 }
 
-const char* Caption(State state) {
+const char* Caption(State state, Language language) {
     switch (state) {
-    case State::Listening: return "Listening to you";
-    case State::Speaking: return "Talking with you";
-    case State::Waiting: return "Starting voice";
-    default: return "Here with you";
+    case State::Listening: return Translate(TextId::ListeningToYou, language);
+    case State::Speaking: return Translate(TextId::TalkingWithYou, language);
+    case State::Waiting: return Translate(TextId::StartingVoice, language);
+    default: return Translate(TextId::HereWithYou, language);
     }
 }
 
@@ -83,13 +87,13 @@ bool NeedsSubtitleStripe(int y) { return Overlaps(y, 236, 300); }
 
 void RenderStripe(uint8_t* stripe, int y, State state, const Pose& pose,
                   const char* answer, const char* footer, int volume,
-                  const SubtitleLayout* subtitle, const char* waiting_hint) {
+                  const SubtitleLayout* subtitle, const char* waiting_hint, Language language) {
     if (!stripe || y < 0 || y + kStripeRows > kScreenHeight) return;
     raster::Canvas canvas(stripe, kScreenWidth, y, kStripeRows);
     canvas.Fill(kBackground);
-    Text(canvas, raster_montserrat_14, "TIANYI", 14, 5, 132, kMint);
+    Text(canvas, raster_montserrat_14, Translate(TextId::PortraitName, language), 14, 5, 132, kMint);
     char volume_text[12];
-    std::snprintf(volume_text, sizeof volume_text, "VOL%d", std::max(0, std::min(100, volume)));
+    std::snprintf(volume_text, sizeof volume_text, Translate(TextId::ShortVolume, language), std::max(0, std::min(100, volume)));
     Text(canvas, raster_montserrat_14, volume_text, 169, 5, 58, 0xCEE8EC);
     canvas.Box({157, 10, 5, 5}, 0x6CE2BD, 2);
 
@@ -114,16 +118,16 @@ void RenderStripe(uint8_t* stripe, int y, State state, const Pose& pose,
             SubtitleLayout local;
             if (!subtitle) { local.Wrap(answer); subtitle = &local; }
             canvas.Box({12, 236, 216, 62}, 0x153840, 9);
-            Text(canvas, raster_montserrat_14, "LIVE CAPTIONS", 22, 237, 198, kMint);
+            Text(canvas, raster_montserrat_14, Translate(TextId::LiveCaptions, language), 22, 237, 198, kMint);
             for (unsigned i = 0; i < subtitle->count; ++i)
                 canvas.Text(passport_font_16, 22, 254 + i * 20,
                             answer + subtitle->start[i], answer + subtitle->end[i], 0xF0FFFC);
         }
     } else {
     canvas.Box({12, 249, 216, 47}, 0x153840, 9);
-    Text(canvas, raster_montserrat_20, Caption(state), 22, 252, 198, 0xF0FFFC);
-    const char* hint = state == State::Speaking ? "" : state == State::Listening ? "I'm all ears" :
-                       state == State::Waiting ? "Getting ready" : "Press OK. Let's talk.";
+    Text(canvas, raster_montserrat_20, Caption(state, language), 22, 252, 198, 0xF0FFFC);
+    const char* hint = state == State::Speaking ? "" : Translate(state == State::Listening ? TextId::AllEars :
+                       state == State::Waiting ? TextId::GettingReady : TextId::LetsTalk, language);
     if (state == State::Waiting && waiting_hint && *waiting_hint) hint = waiting_hint;
     if (state == State::Speaking && (!hint || !*hint)) {
         for (int bar = 0; bar < 9; ++bar) {
@@ -138,6 +142,6 @@ void RenderStripe(uint8_t* stripe, int y, State state, const Pose& pose,
             canvas.Box({201 + dot * 6, 282, 3, 3}, dot <= pose.pulse ? kMint : 0x38626A, 1);
     }
     }
-    Text(canvas, raster_montserrat_14, footer, 12, 302, 216, 0xA5C5CC);
+    Text(canvas, raster_montserrat_14, footer, 12, language == Language::Chinese ? 299 : 302, 216, 0xA5C5CC);
 }
 }  // namespace passport_wifi::avatar

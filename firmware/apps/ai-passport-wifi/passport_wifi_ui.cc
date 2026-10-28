@@ -1,11 +1,13 @@
 #include "passport_wifi_ui.h"
 #include "passport_avatar.h"
+#include "passport_onboarding.h"
 #include "stripe_canvas.h"
 #include <cstdio>
 #include <cstring>
 #include <mutex>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -20,6 +22,9 @@ struct Frame {
     char footer[80] = "OK: call   Hold OK: menu";
     char answer[384]{};
     View view = View::Text;
+    VoiceState voice = VoiceState::Idle;
+    Language language = Language::Chinese;
+    int64_t status_at = 0;
     int volume = 70;
     uint32_t revision = 1;
     uint32_t subtitle_revision = 1;
@@ -28,11 +33,12 @@ Frame input, frame;
 std::mutex lock;
 St7789Lcd* panel = nullptr;
 avatar::Envelope envelope;
+char hotspot[33] = "AIPassport-????";
 
 avatar::State PortraitState(const Frame& value) {
-    if (strcmp(value.title, "Agent speaking") == 0) return avatar::State::Speaking;
-    if (strcmp(value.title, "Listening") == 0) return avatar::State::Listening;
-    if (strcmp(value.title, "Starting call") == 0 || strcmp(value.title, "Reconnecting") == 0)
+    if (value.voice == VoiceState::Speaking) return avatar::State::Speaking;
+    if (value.voice == VoiceState::Listening) return avatar::State::Listening;
+    if (value.voice == VoiceState::Starting || value.voice == VoiceState::Reconnecting)
         return avatar::State::Waiting;
     return avatar::State::Idle;
 }
@@ -61,13 +67,14 @@ void Render(void*) {
     bool was_portrait = false;
     uint32_t stats_at = 0, drawn_stripes = 0;
     uint32_t waiting_at = 0, waiting_second = UINT32_MAX;
+    uint32_t expiry_seen = UINT32_MAX;
     avatar::State previous_state = avatar::State::Idle;
     for (;;) {
         {
             std::lock_guard<std::mutex> guard(lock);
             if (seen != input.revision || subtitle_seen != input.subtitle_revision) frame = input;
         }
-        const bool link = frame.status.phase != AGENT_LINK_PHASE_CONNECTED &&
+        const bool link = frame.view != View::Menu && frame.status.phase != AGENT_LINK_PHASE_CONNECTED &&
                           frame.status.phase != AGENT_LINK_PHASE_READY;
         const bool portrait = !link && frame.view == View::Portrait;
         const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
@@ -75,16 +82,19 @@ void Render(void*) {
         if (state == avatar::State::Waiting && previous_state != state) waiting_at = now_ms;
         const uint32_t second = state == avatar::State::Waiting ? (now_ms - waiting_at) / 1000 : UINT32_MAX;
         const bool waiting_changed = waiting_second != second;
+        const uint32_t expires = link && frame.status.phase == AGENT_LINK_PHASE_PAIRING ?
+            CodeRemaining(frame.status, frame.status_at, esp_timer_get_time()) : UINT32_MAX;
         char waiting_hint[64]{};
         if (state == avatar::State::Waiting) {
-            const char* stage = strcmp(frame.title, "Reconnecting") == 0 ? "Reconnecting" :
-                                strstr(frame.status.hint, "access") ? "Requesting access" :
-                                strstr(frame.status.hint, "model") ? "Starting voice model" :
-                                strstr(frame.status.hint, "Connecting") ? "Opening connection" : "Preparing call";
-            snprintf(waiting_hint, sizeof waiting_hint, "%s %us", stage, unsigned(second));
+            const auto stage = frame.voice == VoiceState::Reconnecting ? TextId::Retrying :
+                               strstr(frame.status.hint, "access") ? TextId::RequestingAccess :
+                               strstr(frame.status.hint, "model") ? TextId::StartingModel :
+                               strstr(frame.status.hint, "Connecting") ? TextId::OpeningConnection : TextId::PreparingVoice;
+            snprintf(waiting_hint, sizeof waiting_hint, Translate(TextId::WaitSeconds, frame.language),
+                     Translate(stage, frame.language), unsigned(second));
         }
         const auto pose = avatar::Animate(state, now_ms, envelope.Read(now_ms));
-        const bool content_changed = seen != frame.revision || was_portrait != portrait || waiting_changed;
+        const bool content_changed = seen != frame.revision || was_portrait != portrait || waiting_changed || expiry_seen != expires;
         const bool subtitle_changed = subtitle_seen != frame.subtitle_revision;
         if (subtitle_changed) subtitle.Wrap(frame.answer);
         const bool full = !portrait || !was_portrait;
@@ -97,31 +107,33 @@ void Render(void*) {
         if (!content_changed && !subtitle_changed && (!portrait || pose == previous)) {
             vTaskDelay(frame_delay); continue;
         }
-        const bool pairing = frame.status.phase == AGENT_LINK_PHASE_PAIRING && frame.status.code[0];
-        const char* title = pairing ? frame.status.code : link ? frame.status.title : frame.title;
-        const char* detail = link ? frame.status.hint : frame.detail;
+        const char* title = frame.title;
+        const char* detail = frame.detail;
         const uint32_t accent = link ? 0xFFB54A : 0x54D6B4;
         for (int y = 0; y < 320; y += 4) {
             if (portrait && !avatar::NeedsStripe(y, full, previous, pose) &&
                 !(content_changed && avatar::NeedsContentStripe(y)) &&
                 !(subtitle_changed && avatar::NeedsSubtitleStripe(y))) continue;
             if (portrait) {
-                avatar::RenderStripe(panel->StripeBuffer(), y, state, pose, frame.answer, frame.footer, frame.volume, &subtitle, waiting_hint);
+                avatar::RenderStripe(panel->StripeBuffer(), y, state, pose, frame.answer, frame.footer,
+                                     frame.volume, &subtitle, waiting_hint, frame.language);
+            } else if (link) {
+                raster::Canvas canvas(panel->StripeBuffer(), 240, y, 4);
+                DrawOnboarding(canvas, frame.status, frame.language, hotspot, expires);
             } else {
             raster::Canvas canvas(panel->StripeBuffer(), 240, y, 4);
             canvas.Fill(0x101820);
             canvas.Box({12, 40, 216, 236}, 0x1D2B36, 12);
             Text(canvas, raster_montserrat_14, "AI PASSPORT / WIFI", 16, 12, 212, 1, accent);
             canvas.Clip({24, 52, 192, 212});
-            Text(canvas, pairing ? raster_montserrat_28 : raster_montserrat_20,
+            Text(canvas, raster_montserrat_20,
                  title, 24, 54, 192, 2, 0xF4F4EC);
-            Text(canvas, Latin(title) ? raster_montserrat_14 : passport_font_16,
+            Text(canvas, frame.view == View::Menu ? passport_font_16 : raster_montserrat_14,
                  detail, 24, 111, 192, 6, 0xC7D3D9);
-            if (!link && frame.answer[0])
+            if (frame.view != View::Menu && frame.answer[0])
                 Text(canvas, raster_montserrat_14, frame.answer, 24, 213, 192, 2, accent);
-            canvas.Clip({12, 281, 216, 39});
-            Text(canvas, raster_montserrat_14, link ? "UP / DOWN: volume" : frame.footer,
-                 14, 284, 212, 2, 0xC7D3D9);
+            canvas.Clip({12, 276, 216, 44});
+            Text(canvas, raster_montserrat_14, frame.footer, 14, 276, 212, 2, 0xC7D3D9);
             }
             if (panel->FlushStripe(y, 4) != ESP_OK) {
                 // A timed-out DMA may still own the stripe. Stop rendering rather
@@ -137,6 +149,7 @@ void Render(void*) {
         subtitle_seen = frame.subtitle_revision;
         previous = pose;
         previous_state = state; waiting_second = second;
+        expiry_seen = expires;
         if (portrait && !was_portrait)
             ESP_LOGI("Passport.avatar", "Tianyi pixel portrait active: 64x64 sprites, face patches, 8 fps cap, 1920-byte stripe");
         was_portrait = portrait;
@@ -148,23 +161,29 @@ void Render(void*) {
 esp_err_t StartUi(St7789Lcd* lcd) {
     if (!lcd || !lcd->Ready()) return ESP_ERR_INVALID_STATE;
     panel = lcd;
+    input.language = GetLanguage();
+    uint8_t mac[6]{};
+    if (esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP) == ESP_OK)
+        snprintf(hotspot, sizeof hotspot, "AIPassport-%02X%02X", mac[4], mac[5]);
     return xTaskCreate(Render, "passport_ui", 4096, nullptr, 2, nullptr) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
 void SetStatus(const agent_link_status_t& status) {
     std::lock_guard<std::mutex> guard(lock);
     if (input.status.phase == status.phase && strcmp(input.status.title, status.title) == 0 &&
-        strcmp(input.status.hint, status.hint) == 0 && strcmp(input.status.code, status.code) == 0) return;
-    input.status = status; ++input.revision;
+        strcmp(input.status.hint, status.hint) == 0 && strcmp(input.status.code, status.code) == 0 &&
+        input.status.expires_s == status.expires_s && input.status.detail == status.detail) return;
+    input.status = status; input.status_at = esp_timer_get_time(); ++input.revision;
 }
-void SetContent(const char* title, const char* detail, const char* footer, View view, int volume) {
+void SetContent(const char* title, const char* detail, const char* footer, View view, int volume, VoiceState voice) {
     std::lock_guard<std::mutex> guard(lock);
     if (strcmp(input.title, title) == 0 && strcmp(input.detail, detail) == 0 &&
-        strcmp(input.footer, footer) == 0 && input.view == view &&
+        strcmp(input.footer, footer) == 0 && input.view == view && input.voice == voice && input.language == GetLanguage() &&
         (volume < 0 || input.volume == volume)) return;
     raster::CopyText(input.title, sizeof input.title, title);
     raster::CopyText(input.detail, sizeof input.detail, detail);
     raster::CopyText(input.footer, sizeof input.footer, footer);
     input.view = view;
+    input.voice = voice; input.language = GetLanguage();
     if (volume >= 0) input.volume = volume > 100 ? 100 : volume;
     ++input.revision;
 }

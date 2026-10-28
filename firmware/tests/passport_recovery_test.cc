@@ -1,4 +1,6 @@
 #include "realtime_recovery.h"
+#include "passport_language.h"
+using passport_wifi::TextId;
 #include <atomic>
 #include <cassert>
 #include <cstdio>
@@ -79,6 +81,7 @@ struct App {
     bool calling_ = true, active_ = true, recovering_ = false;
     int64_t requested_at_ = 0;
     char message_[144]{};
+    void Message(TextId id) { snprintf(message_, sizeof message_, "%s", passport_wifi::Tr(id)); }
     // INSERT_END_CALL
     // INSERT_UPDATE_CALL
 };
